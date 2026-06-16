@@ -76,6 +76,13 @@ Items: Steel Pipes, Welding Rods. Payment terms: Net 30. Status: Submitted.
 - `RecursiveCharacterTextSplitter`: `chunk_size=512`, `chunk_overlap=64`
 - Each chunk stores `chunk_index` and `total_chunks` for reconstruction
 
+### Supplier Metadata Enrichment
+
+`supplier_group` (used in the payload schema and as a filter field) is **not** present on `Purchase
+Order` or `Purchase Invoice` records — it only exists on the `Supplier` doctype. `erpnext_client.py`
+must fetch/cache `Supplier` records and join `supplier_group` onto each PO/Invoice/Contract before
+serialization in `document_parser.py`.
+
 ### Qdrant Payload Schema
 
 ```json

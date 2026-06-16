@@ -4,6 +4,32 @@ Ordered list of modules to build. Each step depends on the ones before it. Do no
 
 ---
 
+## Step 0 — ERPNext Environment Verification
+
+Before writing any ingestion code, verify the target ERPNext instance is actually usable end-to-end.
+This is a one-time local/staging setup step, not application code — see `CLAUDE.local.md` for this
+machine's specific bench path, site URL, and credentials.
+
+**Checklist:**
+1. Confirm the site is reachable (`curl $ERPNEXT_URL` → `200`).
+2. Generate an API key/secret for the integration user (Frappe Desk → User → API Access → Generate
+   Keys, or `frappe.core.doctype.user.user.generate_keys`). Put them in `.env` as `ERPNEXT_API_KEY` /
+   `ERPNEXT_API_SECRET` — never commit them.
+3. Confirm data exists for every doctype the ingestion layer touches: `Purchase Order`,
+   `Purchase Invoice`, `Supplier`, `Supplier Scorecard`, `Contract`, `Terms and Conditions`. Default
+   ERPNext demo data typically populates the first three but **not** `Supplier Scorecard` / `Contract` /
+   `Terms and Conditions` — seed a handful of realistic records for these manually so the
+   unstructured-doc chunking path (Step 4) and scorecard serialization (Step 3) can be exercised
+   against real data, not only mocks.
+4. Note for Step 2 (`erpnext_client.py`): `supplier_group` is **not** a field on `Purchase Order` or
+   `Purchase Invoice` — it only exists on `Supplier`. The client (or `document_parser.py`) must look it
+   up via a `Supplier` fetch/cache, not assume it's present on the PO/Invoice payload.
+
+**Verification:** a request to `Purchase Order` with the generated token returns `200` and a
+non-empty `data` list.
+
+---
+
 ## Step 1 — Project Scaffold
 
 **Files:**
@@ -305,6 +331,9 @@ Calls `POST {BACKEND_URL}/query` via `httpx`.
 
 ## Verification Checklist
 
+- [ ] ERPNext API key/secret generated and verified against the live REST API (Step 0)
+- [ ] Demo data exists (seeded if necessary) for `Supplier Scorecard`, `Contract`, and
+      `Terms and Conditions` (Step 0)
 - [ ] `GET /health` returns `{"status": "ok"}`
 - [ ] `POST /ingest/full` with valid `X-Admin-Secret` triggers background ingest without errors
 - [ ] Qdrant collection exists and contains points after ingest
