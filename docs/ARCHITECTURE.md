@@ -79,9 +79,10 @@ Items: Steel Pipes, Welding Rods. Payment terms: Net 30. Status: Submitted.
 ### Supplier Metadata Enrichment
 
 `supplier_group` (used in the payload schema and as a filter field) is **not** present on `Purchase
-Order` or `Purchase Invoice` records — it only exists on the `Supplier` doctype. `erpnext_client.py`
-must fetch/cache `Supplier` records and join `supplier_group` onto each PO/Invoice/Contract before
-serialization in `document_parser.py`.
+Order` records — it only exists on `Supplier` (and is, separately, already a direct field on
+`Purchase Invoice`). For `Purchase Order` and `Contract`, `erpnext_client.py` must fetch/cache
+`Supplier` records and join `supplier_group` onto the record before serialization in
+`document_parser.py`.
 
 ### Qdrant Payload Schema
 

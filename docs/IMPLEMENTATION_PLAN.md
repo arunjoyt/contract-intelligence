@@ -21,9 +21,11 @@ machine's specific bench path, site URL, and credentials.
    `Terms and Conditions` — seed a handful of realistic records for these manually so the
    unstructured-doc chunking path (Step 4) and scorecard serialization (Step 3) can be exercised
    against real data, not only mocks.
-4. Note for Step 2 (`erpnext_client.py`): `supplier_group` is **not** a field on `Purchase Order` or
-   `Purchase Invoice` — it only exists on `Supplier`. The client (or `document_parser.py`) must look it
-   up via a `Supplier` fetch/cache, not assume it's present on the PO/Invoice payload.
+4. Note for Step 2 (`erpnext_client.py`): `supplier_group` is **not** a field on `Purchase Order`
+   (confirmed: `frappe.client.get_list` rejects it with `DataError`) — it only exists on `Supplier` and
+   on `Purchase Invoice` (which carries its own `supplier_group` field directly). For `Purchase Order`
+   and `Contract`, the client (or `document_parser.py`) must look `supplier_group` up via a `Supplier`
+   fetch/cache rather than assume it's present on the record.
 
 **Verification:** a request to `Purchase Order` with the generated token returns `200` and a
 non-empty `data` list.
