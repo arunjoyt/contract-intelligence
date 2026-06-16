@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+CLAUDE.local.md
 
 # Python
 __pycache__/
