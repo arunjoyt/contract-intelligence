@@ -1,0 +1,21 @@
+# CLAUDE.local.md
+
+Local machine setup — not checked in (see .gitignore). Loaded alongside CLAUDE.md.
+Do not scan filesystem other than the project folder without checking with me.
+
+# Frappe and ERPNext local setup
+
+Frappe bench is available at:  /path/to/venv/bin/bench
+Full path to the bench directory where bench commands should be run from: /path/to/benches/<bench-name>
+e.g
+/path/to/venv/bin/bench --site <site-name>.test list-apps
+frappe  15.x.x version-15
+erpnext 15.x.x version-15
+
+A site with ERPNext is available at: http://127.0.0.1:<port>
+ERPNext site name: <site-name>.test
+ERPNext site admin username/password: Administrator/<password>
+If the site is not running ask me to start it.
+
+
+use frappe-dev skills when required.
