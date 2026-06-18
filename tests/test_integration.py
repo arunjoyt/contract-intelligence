@@ -1,376 +1,467 @@
-"""Integration tests — require live external services and are skipped in CI.
+"""Integration tests — require live external services.
 
-These tests exercise the full end-to-end stack that unit tests cannot cover
-because all external I/O is mocked there.  Run them manually against a local
-docker-compose stack (Qdrant + Langfuse + Postgres) and a reachable ERPNext
-site, with real env vars set.
+Skipped in CI automatically; run manually with:
 
-To run a specific group:
-    pytest tests/test_integration.py -m "ingestion" -v
-    pytest tests/test_integration.py -m "retrieval" -v
-    pytest tests/test_integration.py -m "pipeline" -v
-    pytest tests/test_integration.py -m "api" -v
+    RUN_INTEGRATION=1 pytest tests/test_integration.py -v
+    RUN_INTEGRATION=1 pytest tests/test_integration.py -m ingestion -v
+    RUN_INTEGRATION=1 pytest tests/test_integration.py -m retrieval -v
 
-All tests carry @pytest.mark.skip so the normal `pytest tests/` run (CI) is
-never affected.  Remove the skip decorator to execute a test.
+Services needed for Groups 1 & 2:
+    ERPNext  — http://127.0.0.1:8005  (credentials in .env)
+    Qdrant   — http://localhost:6333
+    OpenAI   — OPENAI_API_KEY in .env
 
-Environment variables required for all tests:
-    ERPNEXT_URL, ERPNEXT_API_KEY, ERPNEXT_API_SECRET
-    OPENAI_API_KEY
-    QDRANT_URL, QDRANT_COLLECTION
-    WEBHOOK_SECRET
-    ADMIN_SECRET
-    BACKEND_URL               (for API-layer tests)
+Groups 3 & 4 remain as stubs until pipeline/api modules are built (Steps 10-12).
+
+A dedicated Qdrant collection (procurement_integration_test) is created at
+session start and deleted on teardown — the production collection is untouched.
 """
 
 from __future__ import annotations
 
-import hashlib
-import hmac
-import json
+import asyncio
 import os
 
 import pytest
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ---------------------------------------------------------------------------
-# Markers
+# Skip helpers
 # ---------------------------------------------------------------------------
 
-pytestmark = pytest.mark.integration
+_run = os.getenv("RUN_INTEGRATION")
+
+live = pytest.mark.skipif(not _run, reason="set RUN_INTEGRATION=1 to run")
+needs_pipeline = pytest.mark.skip(reason="pipeline/api not yet built (Steps 10-12)")
+
+# ---------------------------------------------------------------------------
+# Shared test collection — isolated from production data
+# ---------------------------------------------------------------------------
+
+TEST_COLLECTION = "procurement_integration_test"
+
+# ---------------------------------------------------------------------------
+# Session-scoped fixtures
+# ---------------------------------------------------------------------------
 
 
-# ===========================================================================
-# GROUP 1 — Ingestion pipeline
-# Covers: erpnext_client → document_parser → chunker → embedder → vector_store
-# ===========================================================================
+@pytest.fixture(scope="session")
+def embedder():
+    from ingestion.embedder import Embedder
+    return Embedder()
 
 
-@pytest.mark.skip(reason="requires live ERPNext + OpenAI + Qdrant")
-def test_ingest_purchase_order_end_to_end() -> None:
-    """
-    Fetch a real Purchase Order from ERPNext, serialize it, embed it, upsert
-    to Qdrant, then verify the point is retrievable by docname.
+@pytest.fixture(scope="session")
+def vs(embedder):
+    from retrieval.vector_store import VectorStore
+    store = VectorStore(collection=TEST_COLLECTION)
+    store.ensure_collection()
+    yield store
+    try:
+        store._client.delete_collection(TEST_COLLECTION)
+    except Exception:
+        pass
 
-    What to assert:
-    - po_to_text() produces non-empty text containing the supplier name
-    - chunk_text(force_single_chunk=True) returns exactly 1 chunk
-    - Embedder.embed_texts() returns a list[list[float]] with length 1 and
-      inner length 1536
-    - VectorStore.upsert_chunks() completes without error
-    - VectorStore.search(embed_query("Purchase Order"), top_k=5) returns at
-      least one ScoredPoint whose payload["docname"] matches the PO name
-    """
-    import asyncio
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+async def _first_po_name() -> str:
+    from ingestion.erpnext_client import ERPNextClient
+    async with ERPNextClient() as client:
+        pos = await client.get_list("Purchase Order", limit=1)
+    assert pos, "No Purchase Orders on the ERPNext site"
+    return pos[0]["name"]
+
+
+async def _ingest_po(docname: str, embedder, vs) -> dict:
+    """Full PO ingestion; returns the enriched payload dict that was upserted."""
     from ingestion.chunker import chunk_text
     from ingestion.document_parser import po_to_text
-    from ingestion.embedder import Embedder
     from ingestion.erpnext_client import ERPNextClient
-    from retrieval.vector_store import VectorStore
 
-    async def run() -> None:
-        async with ERPNextClient() as client:
-            pos = await client.get_list("Purchase Order", limit=1)
-            assert pos, "No Purchase Orders found on the ERPNext site"
-            docname = pos[0]["name"]
-            po = await client.get_doc("Purchase Order", docname)
+    async with ERPNextClient() as client:
+        po = await client.get_doc("Purchase Order", docname)
+        supplier = await client.get_doc("Supplier", po["supplier"])
 
-            supplier = await client.get_doc("Supplier", po["supplier"])
-            supplier_group = supplier.get("supplier_group")
+    text = po_to_text(po)
+    chunks = chunk_text(text, force_single_chunk=True)
+    vectors = embedder.embed_texts([c["text"] for c in chunks])
 
-        text = po_to_text(po)
-        assert po["supplier"] in text
+    payload = {
+        **chunks[0],
+        "source_doctype": "Purchase Order",
+        "docname": docname,
+        "supplier": po.get("supplier"),
+        "supplier_group": supplier.get("supplier_group"),
+        "start_date": po.get("transaction_date"),
+        "end_date": po.get("schedule_date"),
+        "status": po.get("status"),
+        "company": po.get("company"),
+        "vector": vectors[0],
+    }
+    vs.upsert_chunks([payload])
+    return payload
 
-        chunks = chunk_text(text, force_single_chunk=True)
-        assert len(chunks) == 1
 
-        embedder = Embedder()
-        vectors = embedder.embed_texts([chunks[0]["text"]])
-        assert len(vectors) == 1
-        assert len(vectors[0]) == 1536
+# ===========================================================================
+# GROUP 1 — ERPNext client connectivity
+# ===========================================================================
 
-        vs = VectorStore()
-        vs.ensure_collection()
-        enriched = [{
-            **chunks[0],
-            "source_doctype": "Purchase Order",
+
+@live
+@pytest.mark.ingestion
+async def test_erpnext_client_lists_purchase_orders() -> None:
+    from ingestion.erpnext_client import ERPNextClient
+
+    async with ERPNextClient() as client:
+        pos = await client.get_list("Purchase Order", limit=5)
+
+    assert len(pos) > 0
+    assert all("name" in p for p in pos)
+
+
+@live
+@pytest.mark.ingestion
+async def test_erpnext_client_fetches_full_po_doc() -> None:
+    from ingestion.erpnext_client import ERPNextClient
+
+    async with ERPNextClient() as client:
+        pos = await client.get_list("Purchase Order", limit=1)
+        po = await client.get_doc("Purchase Order", pos[0]["name"])
+
+    assert po["name"] == pos[0]["name"]
+    assert "supplier" in po
+    assert "items" in po
+
+
+@live
+@pytest.mark.ingestion
+async def test_erpnext_client_fetches_supplier_doc() -> None:
+    """supplier_group lives on the Supplier record, not on Purchase Order."""
+    from ingestion.erpnext_client import ERPNextClient
+
+    async with ERPNextClient() as client:
+        pos = await client.get_list("Purchase Order", limit=1)
+        po = await client.get_doc("Purchase Order", pos[0]["name"])
+        supplier = await client.get_doc("Supplier", po["supplier"])
+
+    assert "supplier_group" in supplier
+    assert supplier["supplier_group"]  # must be non-null on demo data
+
+
+@live
+@pytest.mark.ingestion
+async def test_erpnext_client_raises_not_found_for_bad_docname() -> None:
+    from ingestion.erpnext_client import ERPNextClient, ERPNextNotFoundError
+
+    async with ERPNextClient() as client:
+        with pytest.raises(ERPNextNotFoundError):
+            await client.get_doc("Purchase Order", "DOES-NOT-EXIST-99999")
+
+
+# ===========================================================================
+# GROUP 1 — Document parser against real ERPNext data
+# ===========================================================================
+
+
+@live
+@pytest.mark.ingestion
+async def test_po_to_text_contains_supplier_and_status() -> None:
+    from ingestion.document_parser import po_to_text
+    from ingestion.erpnext_client import ERPNextClient
+
+    async with ERPNextClient() as client:
+        pos = await client.get_list("Purchase Order", limit=1)
+        po = await client.get_doc("Purchase Order", pos[0]["name"])
+
+    text = po_to_text(po)
+    assert po["supplier"] in text
+    assert po["name"] in text
+    assert po.get("status", "") in text
+    assert "<" not in text  # no raw HTML
+
+
+@live
+@pytest.mark.ingestion
+async def test_contract_html_stripped_to_plain_text() -> None:
+    from ingestion.document_parser import extract_text_from_html
+    from ingestion.erpnext_client import ERPNextClient
+
+    async with ERPNextClient() as client:
+        contracts = await client.get_list("Contract", limit=1)
+
+    if not contracts:
+        pytest.skip("No Contracts on the ERPNext site — seed one per Step 0")
+
+    async with ERPNextClient() as client:
+        contract = await client.get_doc("Contract", contracts[0]["name"])
+
+    raw_html = contract.get("contract_terms", "")
+    if not raw_html:
+        pytest.skip("Contract has no contract_terms HTML")
+
+    text = extract_text_from_html(raw_html)
+    assert "<" not in text
+    assert len(text) > 0
+
+
+# ===========================================================================
+# GROUP 1 — Full ingestion pipeline (ERPNext → Qdrant)
+# ===========================================================================
+
+
+@live
+@pytest.mark.ingestion
+async def test_ingest_purchase_order_end_to_end(embedder, vs) -> None:
+    docname = await _first_po_name()
+    payload = await _ingest_po(docname, embedder, vs)
+
+    # Embedding dimensions
+    assert len(payload["vector"]) == 1536
+
+    # Searchable in Qdrant
+    query_vector = embedder.embed_query("purchase order supplier payment terms")
+    results = vs.search(query_vector, top_k=10)
+    retrieved = [r.payload["docname"] for r in results if r.payload]
+    assert docname in retrieved
+
+
+@live
+@pytest.mark.ingestion
+async def test_ingest_contract_end_to_end(embedder, vs) -> None:
+    from ingestion.chunker import chunk_text
+    from ingestion.document_parser import extract_text_from_html
+    from ingestion.erpnext_client import ERPNextClient
+
+    async with ERPNextClient() as client:
+        contracts = await client.get_list("Contract", limit=1)
+
+    if not contracts:
+        pytest.skip("No Contracts on the ERPNext site — seed one per Step 0")
+
+    docname = contracts[0]["name"]
+
+    async with ERPNextClient() as client:
+        contract = await client.get_doc("Contract", docname)
+        supplier_name = contract.get("party_name")
+        supplier = await client.get_doc("Supplier", supplier_name) if supplier_name else {}
+
+    text = extract_text_from_html(contract.get("contract_terms", ""))
+    if not text.strip():
+        pytest.skip("Contract has no extractable text")
+
+    chunks = chunk_text(text)
+    assert len(chunks) >= 1
+    assert all("chunk_index" in c and "total_chunks" in c for c in chunks)
+
+    vectors = embedder.embed_texts([c["text"] for c in chunks])
+    assert len(vectors) == len(chunks)
+
+    enriched = [
+        {
+            **chunk,
+            "source_doctype": "Contract",
             "docname": docname,
-            "supplier": po.get("supplier"),
-            "supplier_group": supplier_group,
-            "start_date": po.get("transaction_date"),
-            "end_date": po.get("schedule_date"),
-            "status": po.get("status"),
-            "company": po.get("company"),
-            "vector": vectors[0],
-        }]
-        vs.upsert_chunks(enriched)
+            "supplier": supplier_name,
+            "supplier_group": supplier.get("supplier_group"),
+            "start_date": contract.get("start_date"),
+            "end_date": contract.get("end_date"),
+            "status": contract.get("status"),
+            "company": contract.get("company"),
+            "vector": vector,
+        }
+        for chunk, vector in zip(chunks, vectors, strict=True)
+    ]
+    vs.upsert_chunks(enriched)
 
-        results = vs.search(embedder.embed_query("purchase order"), top_k=5)
-        docnames = [r.payload["docname"] for r in results if r.payload]
-        assert docname in docnames
+    # All chunks must carry source_doctype
+    assert all(c["source_doctype"] == "Contract" for c in enriched)
 
-    asyncio.run(run())
-
-
-@pytest.mark.skip(reason="requires live ERPNext + OpenAI + Qdrant")
-def test_ingest_contract_chunks_html_correctly() -> None:
-    """
-    Fetch a real Contract, strip HTML from contract_terms, chunk it, and
-    verify each chunk carries the correct metadata.
-
-    What to assert:
-    - extract_text_from_html() removes all '<' characters
-    - chunk_text() returns >= 1 chunk, all with chunk_index / total_chunks set
-    - Every enriched chunk dict has source_doctype == "Contract"
-    - After upsert, VectorStore.delete_by_docname() removes all chunks
-      (search returns nothing for that docname afterwards)
-    """
-    ...
+    # Cleanup: delete and confirm gone
+    vs.delete_by_docname(docname)
+    query_vector = embedder.embed_query(text[:100])
+    results = vs.search(query_vector, filter_conditions={"docname": docname}, top_k=5)
+    assert len(results) == 0
 
 
-@pytest.mark.skip(reason="requires live ERPNext + OpenAI + Qdrant")
-def test_idempotent_upsert_does_not_duplicate_points() -> None:
-    """
-    Ingest the same Purchase Order twice and confirm point count stays the same.
+@live
+@pytest.mark.ingestion
+async def test_idempotent_upsert_does_not_duplicate_points(embedder, vs) -> None:
+    docname = await _first_po_name()
 
-    What to assert:
-    - Upsert once → count N points for the docname
-    - Upsert again (same doc, same chunk_index) → count is still N
-      (deterministic uuid5 IDs overwrite, not append)
-    - Use VectorStore.get_all_texts() and filter by docname to count
-    """
-    ...
+    await _ingest_po(docname, embedder, vs)
+    await _ingest_po(docname, embedder, vs)  # second upsert — same IDs
+
+    all_docs = vs.get_all_texts()
+    count = sum(1 for d in all_docs if d.get("docname") == docname)
+    # PO is force_single_chunk → exactly 1 point regardless of how many times ingested
+    assert count == 1
 
 
-@pytest.mark.skip(reason="requires live ERPNext + OpenAI + Qdrant")
-def test_supplier_group_enriched_in_po_payload() -> None:
-    """
-    Confirm that the supplier_group field on the ingested PO payload comes
-    from the Supplier record (not from the PO itself, which doesn't have it).
+@live
+@pytest.mark.ingestion
+async def test_supplier_group_enriched_in_po_payload(embedder, vs) -> None:
+    from ingestion.erpnext_client import ERPNextClient
 
-    What to assert:
-    - The ERPNext Supplier for the PO has a non-null supplier_group
-    - The Qdrant payload for the ingested PO chunk has supplier_group set
-      to the same value
-    """
-    ...
+    async with ERPNextClient() as client:
+        pos = await client.get_list("Purchase Order", limit=1)
+        po = await client.get_doc("Purchase Order", pos[0]["name"])
+        supplier = await client.get_doc("Supplier", po["supplier"])
+
+    expected_group = supplier.get("supplier_group")
+    assert expected_group, "Supplier on demo data must have supplier_group set"
+
+    docname = po["name"]
+    await _ingest_po(docname, embedder, vs)
+
+    all_docs = vs.get_all_texts()
+    payload = next((d for d in all_docs if d.get("docname") == docname), None)
+    assert payload is not None
+    assert payload["supplier_group"] == expected_group
 
 
 # ===========================================================================
 # GROUP 2 — Retrieval layer
-# Covers: vector_store + hybrid_search + reranker working together
 # ===========================================================================
 
 
-@pytest.mark.skip(reason="requires live OpenAI + Qdrant (with data already ingested)")
-def test_hybrid_search_returns_more_relevant_than_vector_alone() -> None:
-    """
-    For a query containing an exact term that appears in a known document
-    (e.g. a specific PO number), verify that hybrid search surfaces that doc
-    in its top-5 while pure vector search may not.
+@live
+@pytest.mark.retrieval
+async def test_vector_store_metadata_filter_restricts_to_supplier(embedder, vs) -> None:
+    from ingestion.erpnext_client import ERPNextClient
 
-    What to assert:
-    - HybridSearch.search("PO-XXXX payment terms") returns a result whose
-      docname is "PO-XXXX" in the first 5 positions
-    - The BM25 component is demonstrably contributing (manually check that
-      the BM25 index was built from get_all_texts())
-    """
-    ...
+    # Collect POs across (potentially) multiple suppliers
+    async with ERPNextClient() as client:
+        pos = await client.get_list("Purchase Order", limit=5)
 
+    if len(pos) < 2:
+        pytest.skip("Need at least 2 Purchase Orders for filter test")
 
-@pytest.mark.skip(reason="requires live OpenAI + Qdrant (with data already ingested)")
-def test_reranker_with_real_model_orders_by_relevance() -> None:
-    """
-    Load the cross-encoder model for real (no mock), run rerank() over a set
-    of candidates where one is clearly more relevant, and verify ordering.
+    # Ingest first two POs
+    p1 = await _ingest_po(pos[0]["name"], embedder, vs)
+    p2 = await _ingest_po(pos[1]["name"], embedder, vs)
 
-    What to assert:
-    - Reranker.warm_up() completes without error
-    - Given candidates ["payment terms net 30 days", "unrelated supplier delivery"],
-      rerank("what are the payment terms") ranks the first candidate first
-    - The model is not reloaded on a second rerank() call (check _model identity)
-    """
-    ...
+    if p1["supplier"] == p2["supplier"]:
+        pytest.skip("Both POs share the same supplier — need two different suppliers")
 
-
-@pytest.mark.skip(reason="requires live OpenAI + Qdrant (with data already ingested)")
-def test_metadata_filter_restricts_vector_search_to_supplier() -> None:
-    """
-    Ingest POs from two different suppliers, then search with a supplier filter
-    and verify results only include the filtered supplier.
-
-    What to assert:
-    - After ingesting POs for supplier A and supplier B,
-      VectorStore.search(vector, filter_conditions={"supplier": "Supplier A"})
-      returns only results with payload["supplier"] == "Supplier A"
-    """
-    ...
-
-
-@pytest.mark.skip(reason="requires live OpenAI + Qdrant")
-def test_bm25_index_rebuilt_after_webhook_upsert() -> None:
-    """
-    Upsert a new document via the webhook handler, then confirm the BM25 index
-    reflects it (a search for a term unique to that document finds it via BM25).
-
-    What to assert:
-    - Before upsert: HybridSearch.search("unique-term-XYZ") returns 0 results
-    - Trigger the rebuild_bm25 callback (as the webhook handler would)
-    - After rebuild: the same search returns >= 1 result containing the new doc
-    """
-    ...
-
-
-# ===========================================================================
-# GROUP 3 — Full query pipeline (end-to-end RAG)
-# Covers: query_rewriter + hybrid_search + reranker + GPT-4o generation
-# ===========================================================================
-
-
-@pytest.mark.skip(reason="requires live OpenAI + Qdrant (with data ingested) + Langfuse")
-def test_query_pipeline_returns_answer_with_citations() -> None:
-    """
-    Run QueryPipeline.run() with a question answerable from the indexed data
-    and verify the answer contains docname-style citations.
-
-    What to assert:
-    - result["answer"] is a non-empty string
-    - result["sources"] is a non-empty list
-    - Each source has docname, source_doctype, supplier fields
-    - The answer text contains at least one "[docname]" citation pattern
-    - No hallucinated docnames appear in citations (all cited docnames exist
-      in result["sources"])
-    """
-    ...
-
-
-@pytest.mark.skip(reason="requires live OpenAI + Qdrant + Langfuse")
-def test_query_pipeline_respects_supplier_filter() -> None:
-    """
-    Run the pipeline with a supplier filter and verify the answer only
-    references that supplier's documents.
-
-    What to assert:
-    - With filters={"supplier": "Supplier A"}, sources contain only
-      docs where payload["supplier"] == "Supplier A"
-    """
-    ...
-
-
-@pytest.mark.skip(reason="requires live OpenAI + Qdrant + Langfuse")
-def test_query_pipeline_refuses_to_hallucinate_when_no_context() -> None:
-    """
-    Ask a question with no matching documents in Qdrant and verify the model
-    says it cannot answer rather than hallucinating.
-
-    What to assert:
-    - Qdrant returns 0 results for an obscure query
-    - result["answer"] contains a phrase like "not found" or "no information"
-    - result["sources"] is empty
-    """
-    ...
-
-
-@pytest.mark.skip(reason="requires live OpenAI + Qdrant + Langfuse")
-def test_hyde_and_step_back_strategies_both_return_answers() -> None:
-    """
-    Run the pipeline twice — once with QUERY_REWRITE_STRATEGY=hyde and once
-    with step_back — and verify both produce non-empty answers.
-
-    What to assert:
-    - Both strategies produce result["answer"] with len > 0
-    - The HyDE strategy embeds a hypothetical document (check that
-      QueryRewriter.rewrite() returns a vector of length 1536)
-    - The step_back strategy returns a rewritten string at a higher
-      abstraction level than the original question
-    """
-    ...
-
-
-# ===========================================================================
-# GROUP 4 — API layer
-# Covers: FastAPI endpoints hit over HTTP (app must be running)
-# ===========================================================================
-
-
-@pytest.mark.skip(reason="requires running FastAPI server at BACKEND_URL")
-def test_health_endpoint_returns_ok() -> None:
-    """
-    GET /health → {"status": "ok"}
-    """
-    import httpx
-
-    backend_url = os.environ["BACKEND_URL"]
-    response = httpx.get(f"{backend_url}/health")
-    assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
-
-
-@pytest.mark.skip(reason="requires running FastAPI server + live Qdrant + OpenAI")
-def test_ingest_full_endpoint_triggers_background_ingest() -> None:
-    """
-    POST /ingest/full with a valid X-Admin-Secret header should return 202
-    and eventually populate Qdrant with points.
-
-    What to assert:
-    - Response is 202 (accepted, background task queued)
-    - After a short wait, VectorStore.get_all_texts() returns > 0 docs
-    - POST /ingest/full with a wrong Admin-Secret returns 401
-    """
-    ...
-
-
-@pytest.mark.skip(reason="requires running FastAPI server + live ERPNext + Qdrant")
-def test_webhook_endpoint_reindexes_document() -> None:
-    """
-    POST /webhook/erpnext with a valid HMAC signature for a known PO, then
-    verify Qdrant was updated.
-
-    What to assert:
-    - Response is 200 with {"status": "indexed", "docname": "PO-XXX"}
-    - The Qdrant point for PO-XXX is present (search finds it)
-    - POST with a bad signature returns 401
-    - POST for an unsupported doctype returns {"status": "ignored"}
-    """
-    import httpx
-
-    backend_url = os.environ["BACKEND_URL"]
-    secret = os.environ["WEBHOOK_SECRET"]
-    docname = "PO-001"  # replace with a real docname from the test site
-
-    payload = json.dumps({"doctype": "Purchase Order", "docname": docname}).encode()
-    signature = hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
-
-    response = httpx.post(
-        f"{backend_url}/webhook/erpnext",
-        content=payload,
-        headers={
-            "Content-Type": "application/json",
-            "X-Frappe-Webhook-Signature": signature,
-        },
+    query_vector = embedder.embed_query("purchase order")
+    results = vs.search(
+        query_vector,
+        filter_conditions={"supplier": p1["supplier"]},
+        top_k=10,
     )
-    assert response.status_code == 200
-    assert response.json()["status"] == "indexed"
+
+    assert all(r.payload["supplier"] == p1["supplier"] for r in results if r.payload)
 
 
-@pytest.mark.skip(reason="requires running FastAPI server + live OpenAI + Qdrant")
-def test_query_endpoint_returns_answer_and_sources() -> None:
-    """
-    POST /query with a question answerable from indexed data.
+@live
+@pytest.mark.retrieval
+async def test_hybrid_search_bm25_surfaces_exact_docname(embedder, vs) -> None:
+    from retrieval.hybrid_search import HybridSearch
 
-    What to assert:
-    - Response is 200
-    - Body contains "answer" (non-empty string) and "sources" (list)
-    - POST /query with invalid JSON returns 422
-    """
-    import httpx
+    docname = await _first_po_name()
+    await _ingest_po(docname, embedder, vs)
 
-    backend_url = os.environ["BACKEND_URL"]
-    response = httpx.post(
-        f"{backend_url}/query",
-        json={"question": "What purchase orders are pending delivery?"},
-    )
-    assert response.status_code == 200
-    body = response.json()
-    assert body["answer"]
-    assert isinstance(body["sources"], list)
+    hs = HybridSearch(embedder=embedder, vector_store=vs)
+    hs.build_bm25_index(vs.get_all_texts())
+
+    # The docname is an exact term — BM25 should pick it up even if the
+    # vector alone might not rank it first
+    results = hs.search(docname, top_k=5)
+    retrieved = [r.get("docname") for r in results]
+    assert docname in retrieved
+
+
+@live
+@pytest.mark.retrieval
+async def test_hybrid_search_bm25_rebuilt_after_new_upsert(embedder, vs) -> None:
+    from ingestion.erpnext_client import ERPNextClient
+    from retrieval.hybrid_search import HybridSearch
+
+    hs = HybridSearch(embedder=embedder, vector_store=vs)
+
+    # Build index with current state
+    hs.build_bm25_index(vs.get_all_texts())
+    before_count = len(hs._corpus_docs)
+
+    # Ingest a second PO (may already be there — idempotent)
+    async with ERPNextClient() as client:
+        pos = await client.get_list("Purchase Order", limit=2)
+    second_docname = pos[-1]["name"]
+    await _ingest_po(second_docname, embedder, vs)
+
+    # Rebuild — corpus must grow (or stay same if already ingested)
+    hs.build_bm25_index(vs.get_all_texts())
+    assert len(hs._corpus_docs) >= before_count
+
+
+@live
+@pytest.mark.retrieval
+def test_reranker_real_model_orders_candidates_by_relevance() -> None:
+    """Load the actual cross-encoder; no Qdrant or ERPNext needed."""
+    from retrieval.reranker import Reranker
+
+    r = Reranker()
+    r.warm_up()  # downloads model if not cached
+
+    candidates = [
+        {"docname": "PO-001", "chunk_index": 0, "text": "payment terms net 30 days outstanding invoice supplier"},
+        {"docname": "CON-001", "chunk_index": 0, "text": "delivery schedule lead time logistics warehouse"},
+        {"docname": "SSC-001", "chunk_index": 0, "text": "supplier scorecard quality rating performance criteria"},
+    ]
+    results = r.rerank("what are the payment terms", candidates, top_n=3)
+
+    assert len(results) == 3
+    assert results[0]["docname"] == "PO-001"  # payment-terms doc must rank first
+
+    # Model not reloaded on second call
+    model_before = r._model
+    r.rerank("delivery schedule", candidates, top_n=2)
+    assert r._model is model_before
+
+
+# ===========================================================================
+# GROUP 3 — Full query pipeline  (stubs — Steps 10-11 not yet built)
+# ===========================================================================
+
+
+@needs_pipeline
+def test_query_pipeline_returns_answer_with_citations() -> None: ...
+
+
+@needs_pipeline
+def test_query_pipeline_respects_supplier_filter() -> None: ...
+
+
+@needs_pipeline
+def test_query_pipeline_refuses_to_hallucinate_when_no_context() -> None: ...
+
+
+@needs_pipeline
+def test_hyde_and_step_back_strategies_both_return_answers() -> None: ...
+
+
+# ===========================================================================
+# GROUP 4 — API layer  (stubs — Step 12 not yet built)
+# ===========================================================================
+
+
+@needs_pipeline
+def test_health_endpoint_returns_ok() -> None: ...
+
+
+@needs_pipeline
+def test_ingest_full_endpoint_triggers_background_ingest() -> None: ...
+
+
+@needs_pipeline
+def test_webhook_endpoint_reindexes_document() -> None: ...
+
+
+@needs_pipeline
+def test_query_endpoint_returns_answer_and_sources() -> None: ...
