@@ -30,4 +30,5 @@ markers = [
     "integration: marks tests that require live external services (ERPNext, Qdrant, OpenAI)",
     "ingestion: marks ingestion-layer integration tests",
     "retrieval: marks retrieval-layer integration tests",
+    "pipeline: marks pipeline-layer integration tests (OpenAI + Qdrant, no ERPNext required for some)",
 ]
