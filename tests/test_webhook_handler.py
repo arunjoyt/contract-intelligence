@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI
@@ -102,7 +102,9 @@ def test_invalid_signature_returns_401(http_client: TestClient, mock_erpnext: As
     mock_erpnext.get_doc.assert_not_called()
 
 
-def test_missing_signature_header_returns_401(http_client: TestClient, mock_erpnext: AsyncMock) -> None:
+def test_missing_signature_header_returns_401(
+    http_client: TestClient, mock_erpnext: AsyncMock
+) -> None:
     body = json.dumps({"doctype": "Purchase Order", "docname": "PO-001"}).encode()
     response = http_client.post(
         "/webhook/erpnext",

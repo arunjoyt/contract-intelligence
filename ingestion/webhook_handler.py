@@ -37,6 +37,54 @@ from retrieval.vector_store import VectorStore
 SUPPORTED_DOCTYPES = frozenset({"Purchase Order", "Contract", "Supplier Scorecard"})
 
 
+async def handle_webhook_request(
+    request: Request,
+    erpnext_client: ERPNextClient,
+    embedder: Embedder,
+    vector_store: VectorStore,
+    rebuild_bm25: Callable[[], None],
+    webhook_secret: str,
+) -> dict[str, str]:
+    """Process a single ERPNext webhook request.
+
+    Verifies the HMAC signature, fetches and re-indexes the document.
+    Called by both ``create_webhook_router`` (test-friendly factory) and
+    ``api/main.py`` (which registers the route at module level).
+    """
+    body = await request.body()
+    _verify_signature(body, request.headers.get("X-Frappe-Webhook-Signature", ""), webhook_secret)
+
+    payload = json.loads(body)
+    doctype: str = payload.get("doctype", "")
+    docname: str = payload.get("docname", "")
+
+    if doctype not in SUPPORTED_DOCTYPES:
+        return {"status": "ignored", "doctype": doctype}
+
+    doc = await erpnext_client.get_doc(doctype, docname)
+    supplier_name = doc.get("supplier") or doc.get("party_name")
+    supplier_group = await _fetch_supplier_group(erpnext_client, supplier_name)
+
+    text, metadata, force_single = prepare_doc_for_indexing(doctype, doc, supplier_group)
+
+    if not text.strip():
+        return {"status": "skipped", "docname": docname, "reason": "empty text"}
+
+    chunks = chunk_text(text, force_single_chunk=force_single)
+    vectors = embedder.embed_texts([c["text"] for c in chunks])
+
+    enriched = [
+        {**chunk, **metadata, "vector": vector}
+        for chunk, vector in zip(chunks, vectors, strict=True)
+    ]
+
+    vector_store.delete_by_docname(docname)
+    vector_store.upsert_chunks(enriched)
+    rebuild_bm25()
+
+    return {"status": "indexed", "docname": docname}
+
+
 def create_webhook_router(
     erpnext_client: ERPNextClient,
     embedder: Embedder,
@@ -53,39 +101,15 @@ def create_webhook_router(
     router = APIRouter()
 
     @router.post("/erpnext")
-    async def handle_webhook(request: Request) -> dict[str, str]:
-        body = await request.body()
-        _verify_signature(body, request.headers.get("X-Frappe-Webhook-Signature", ""), _secret)
-
-        payload = json.loads(body)
-        doctype: str = payload.get("doctype", "")
-        docname: str = payload.get("docname", "")
-
-        if doctype not in SUPPORTED_DOCTYPES:
-            return {"status": "ignored", "doctype": doctype}
-
-        doc = await erpnext_client.get_doc(doctype, docname)
-        supplier_name = doc.get("supplier") or doc.get("party_name")
-        supplier_group = await _fetch_supplier_group(erpnext_client, supplier_name)
-
-        text, metadata, force_single = _prepare(doctype, doc, supplier_group)
-
-        if not text.strip():
-            return {"status": "skipped", "docname": docname, "reason": "empty text"}
-
-        chunks = chunk_text(text, force_single_chunk=force_single)
-        vectors = embedder.embed_texts([c["text"] for c in chunks])
-
-        enriched = [
-            {**chunk, **metadata, "vector": vector}
-            for chunk, vector in zip(chunks, vectors, strict=True)
-        ]
-
-        vector_store.delete_by_docname(docname)
-        vector_store.upsert_chunks(enriched)
-        rebuild_bm25()
-
-        return {"status": "indexed", "docname": docname}
+    async def _handler(request: Request) -> dict[str, str]:
+        return await handle_webhook_request(
+            request=request,
+            erpnext_client=erpnext_client,
+            embedder=embedder,
+            vector_store=vector_store,
+            rebuild_bm25=rebuild_bm25,
+            webhook_secret=_secret,
+        )
 
     return router
 
@@ -118,7 +142,7 @@ async def _fetch_supplier_group(client: ERPNextClient, supplier_name: str | None
         return None
 
 
-def _prepare(
+def prepare_doc_for_indexing(
     doctype: str, doc: dict[str, Any], supplier_group: str | None
 ) -> tuple[str, dict[str, Any], bool]:
     """Return ``(text, metadata, force_single_chunk)`` for the given doctype.

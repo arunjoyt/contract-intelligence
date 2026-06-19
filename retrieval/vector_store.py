@@ -38,7 +38,7 @@ class VectorStore:
         collection: str | None = None,
     ) -> None:
         self._url = url or os.environ["QDRANT_URL"]
-        self._api_key = api_key or os.environ.get("QDRANT_API_KEY")
+        self._api_key = api_key or os.environ.get("QDRANT_API_KEY") or None
         self._collection = collection or os.environ["QDRANT_COLLECTION"]
         self._client = QdrantClient(url=self._url, api_key=self._api_key)
 
