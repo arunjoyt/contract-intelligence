@@ -12,7 +12,8 @@ Services needed for Groups 1-3:
     Qdrant   — http://localhost:6333
     OpenAI   — OPENAI_API_KEY in .env
 
-Group 4 remains as stubs until api/main.py is built (Step 12).
+Group 4 tests the API layer (Step 12 — api/main.py).
+Services needed: Qdrant + ERPNext + OpenAI (same as Groups 1-3).
 
 A dedicated Qdrant collection (procurement_integration_test) is created at
 session start and deleted on teardown — the production collection is untouched.
@@ -34,7 +35,6 @@ load_dotenv()
 _run = os.getenv("RUN_INTEGRATION")
 
 live = pytest.mark.skipif(not _run, reason="set RUN_INTEGRATION=1 to run")
-needs_pipeline = pytest.mark.skip(reason="pipeline/api not yet built (Steps 10-12)")
 
 # ---------------------------------------------------------------------------
 # Shared test collection — isolated from production data
@@ -564,21 +564,124 @@ async def test_hyde_and_step_back_strategies_both_return_answers(embedder, vs) -
 
 
 # ===========================================================================
-# GROUP 4 — API layer  (stubs — Step 12 not yet built)
+# GROUP 4 — API layer (Step 12 — api/main.py)
 # ===========================================================================
 
 
-@needs_pipeline
-def test_health_endpoint_returns_ok() -> None: ...
+@pytest.fixture(scope="session")
+def api_client(vs):
+    """Session-scoped TestClient wired to the live test Qdrant collection.
+
+    Depends on ``vs`` so the test collection is created before the app
+    lifespan runs and torn down after the client closes.
+    """
+    import os
+
+    from fastapi.testclient import TestClient
+
+    from api.main import app
+
+    original = os.environ.get("QDRANT_COLLECTION")
+    os.environ["QDRANT_COLLECTION"] = TEST_COLLECTION
+    try:
+        with TestClient(app) as client:
+            yield client
+    finally:
+        if original is None:
+            os.environ.pop("QDRANT_COLLECTION", None)
+        else:
+            os.environ["QDRANT_COLLECTION"] = original
 
 
-@needs_pipeline
-def test_ingest_full_endpoint_triggers_background_ingest() -> None: ...
+@live
+@pytest.mark.api
+def test_health_endpoint_returns_ok(api_client) -> None:
+    resp = api_client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
 
 
-@needs_pipeline
-def test_webhook_endpoint_reindexes_document() -> None: ...
+@live
+@pytest.mark.api
+def test_ingest_full_endpoint_triggers_background_ingest(api_client, vs) -> None:
+    """POST /ingest/full populates the test collection end-to-end.
+
+    TestClient runs background tasks synchronously, so all documents are
+    indexed by the time the response returns.
+    """
+    admin_secret = os.getenv("ADMIN_SECRET", "")
+    assert admin_secret, "ADMIN_SECRET must be set in .env"
+
+    resp = api_client.post("/ingest/full", headers={"X-Admin-Secret": admin_secret})
+    assert resp.status_code == 202
+    assert resp.json() == {"status": "accepted"}
+
+    # Background task ran synchronously — collection must have data
+    docs = vs.get_all_texts()
+    assert len(docs) > 0, "Expected at least one document after full ingest"
 
 
-@needs_pipeline
-def test_query_endpoint_returns_answer_and_sources() -> None: ...
+@live
+@pytest.mark.api
+async def test_webhook_endpoint_reindexes_document(api_client) -> None:
+    """POST /webhook/erpnext re-indexes a real PO from ERPNext."""
+    import hashlib
+    import hmac
+    import json
+
+    from ingestion.erpnext_client import ERPNextClient
+
+    async with ERPNextClient() as client:
+        pos = await client.get_list("Purchase Order", limit=1)
+    assert pos, "Need at least one Purchase Order on the ERPNext site"
+
+    docname = pos[0]["name"]
+    webhook_secret = os.getenv("WEBHOOK_SECRET", "")
+    assert webhook_secret, "WEBHOOK_SECRET must be set in .env"
+
+    body = json.dumps({"doctype": "Purchase Order", "docname": docname}).encode()
+    sig = hmac.new(webhook_secret.encode(), body, hashlib.sha256).hexdigest()
+
+    resp = api_client.post(
+        "/webhook/erpnext",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Frappe-Webhook-Signature": sig,
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "indexed"
+    assert data["docname"] == docname
+
+
+@live
+@pytest.mark.api
+async def test_query_endpoint_returns_answer_and_sources(
+    api_client, embedder, vs
+) -> None:
+    """POST /query returns a grounded answer with [docname] citations.
+
+    Seeds the test collection directly so the vector-search leg always has
+    at least one document, then queries via the API.
+    """
+    import re
+
+    docname = await _first_po_name()
+    payload = await _ingest_po(docname, embedder, vs)
+    supplier = payload["supplier"]
+
+    resp = api_client.post(
+        "/query",
+        json={"question": f"What purchase orders have been issued to {supplier}?"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["answer"], "Expected a non-empty answer"
+
+    citations = re.findall(r"\[([^\]]+)\]", data["answer"])
+    assert citations or "could not find" in data["answer"].lower(), (
+        f"Expected citations or fallback phrase; got: {data['answer']!r}"
+    )
+    assert isinstance(data["sources"], list)
