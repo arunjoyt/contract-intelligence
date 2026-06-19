@@ -5,13 +5,14 @@ Skipped in CI automatically; run manually with:
     RUN_INTEGRATION=1 pytest tests/test_integration.py -v
     RUN_INTEGRATION=1 pytest tests/test_integration.py -m ingestion -v
     RUN_INTEGRATION=1 pytest tests/test_integration.py -m retrieval -v
+    RUN_INTEGRATION=1 pytest tests/test_integration.py -m pipeline -v
 
-Services needed for Groups 1 & 2:
+Services needed for Groups 1-3:
     ERPNext  — http://127.0.0.1:8005  (credentials in .env)
     Qdrant   — http://localhost:6333
     OpenAI   — OPENAI_API_KEY in .env
 
-Groups 3 & 4 remain as stubs until pipeline/api modules are built (Steps 10-12).
+Group 4 remains as stubs until api/main.py is built (Step 12).
 
 A dedicated Qdrant collection (procurement_integration_test) is created at
 session start and deleted on teardown — the production collection is untouched.
@@ -19,7 +20,6 @@ session start and deleted on teardown — the production collection is untouched
 
 from __future__ import annotations
 
-import asyncio
 import os
 
 import pytest
@@ -426,24 +426,134 @@ def test_reranker_real_model_orders_candidates_by_relevance() -> None:
 
 
 # ===========================================================================
-# GROUP 3 — Full query pipeline  (stubs — Steps 10-11 not yet built)
+# GROUP 3 helpers
 # ===========================================================================
 
 
-@needs_pipeline
-def test_query_pipeline_returns_answer_with_citations() -> None: ...
+def _make_pipeline(embedder, vs, strategy: str = "hyde"):
+    """Build a fully-wired QueryPipeline against the current test collection state.
+
+    BM25 index is rebuilt from whatever is in ``vs`` at call time, so call
+    this *after* any setup upserts to ensure lexical search is current.
+    """
+    from pipeline.query_pipeline import QueryPipeline
+    from pipeline.query_rewriter import QueryRewriter
+    from retrieval.hybrid_search import HybridSearch
+    from retrieval.reranker import Reranker
+
+    hs = HybridSearch(embedder=embedder, vector_store=vs)
+    hs.build_bm25_index(vs.get_all_texts())
+    reranker = Reranker()
+    rewriter = QueryRewriter(embedder=embedder, strategy=strategy)
+    return QueryPipeline(rewriter=rewriter, hybrid_search=hs, reranker=reranker)
 
 
-@needs_pipeline
-def test_query_pipeline_respects_supplier_filter() -> None: ...
+# ===========================================================================
+# GROUP 3 — Full query pipeline
+# ===========================================================================
 
 
-@needs_pipeline
-def test_query_pipeline_refuses_to_hallucinate_when_no_context() -> None: ...
+@live
+@pytest.mark.pipeline
+async def test_query_pipeline_returns_answer_with_citations(embedder, vs) -> None:
+    """Full chain: HyDE rewrite → embed → hybrid search → rerank → GPT-4o generation.
+
+    Verifies the answer is non-empty, contains at least one [docname] citation,
+    and the sources list is populated with matching SourceDoc objects.
+    """
+    import re
+
+    docname = await _first_po_name()
+    payload = await _ingest_po(docname, embedder, vs)
+    supplier = payload["supplier"]
+
+    pipeline = _make_pipeline(embedder, vs)
+    result = pipeline.run(f"What purchase orders have been issued to {supplier}?")
+
+    assert result["answer"], "Expected a non-empty answer"
+    citations = re.findall(r"\[([^\]]+)\]", result["answer"])
+    assert citations, f"Expected at least one [docname] citation; got: {result['answer']!r}"
+    assert result["sources"], "Expected at least one SourceDoc in sources"
 
 
-@needs_pipeline
-def test_hyde_and_step_back_strategies_both_return_answers() -> None: ...
+@live
+@pytest.mark.pipeline
+async def test_query_pipeline_respects_supplier_filter(embedder, vs) -> None:
+    """Explicit supplier filter flows from caller → HybridSearch → Qdrant FieldCondition.
+
+    All sources returned must have the filtered supplier — any source from a
+    different supplier means the filter was dropped somewhere in the chain.
+    """
+    from ingestion.erpnext_client import ERPNextClient
+
+    async with ERPNextClient() as client:
+        pos = await client.get_list("Purchase Order", limit=5)
+
+    if len(pos) < 2:
+        pytest.skip("Need at least 2 Purchase Orders to test supplier isolation")
+
+    p1 = await _ingest_po(pos[0]["name"], embedder, vs)
+    p2 = await _ingest_po(pos[1]["name"], embedder, vs)
+
+    if p1["supplier"] == p2["supplier"]:
+        pytest.skip("Both POs share the same supplier — seed data with two distinct suppliers")
+
+    target_supplier = p1["supplier"]
+    pipeline = _make_pipeline(embedder, vs)
+    result = pipeline.run(
+        "Show me purchase orders",
+        filters={"supplier": target_supplier},
+    )
+
+    for source in result["sources"]:
+        assert source.supplier == target_supplier, (
+            f"Source {source.docname!r} has supplier {source.supplier!r}, "
+            f"expected {target_supplier!r}"
+        )
+
+
+@live
+@pytest.mark.pipeline
+async def test_query_pipeline_refuses_to_hallucinate_when_no_context(embedder, vs) -> None:
+    """GPT-4o must not fabricate an answer when the context has nothing relevant.
+
+    The test collection contains procurement documents.  A question with zero
+    overlap with those documents should trigger the exact fallback phrase from
+    the system prompt rather than a hallucinated answer.
+    """
+    # Ensure there is *something* indexed so the pipeline actually retrieves
+    # chunks — we are testing the "irrelevant context" branch, not "empty collection".
+    await _ingest_po(await _first_po_name(), embedder, vs)
+
+    pipeline = _make_pipeline(embedder, vs)
+    result = pipeline.run(
+        "What is the chemical formula for water and how is it used in nuclear reactors?"
+    )
+
+    assert "could not find" in result["answer"].lower(), (
+        f"Expected the fallback 'could not find' phrase, got: {result['answer']!r}"
+    )
+
+
+@live
+@pytest.mark.pipeline
+async def test_hyde_and_step_back_strategies_both_return_answers(embedder, vs) -> None:
+    """Both QUERY_REWRITE_STRATEGY values produce a non-empty answer and sources list.
+
+    Verifies the strategy env-var wiring and that the step-back prompt path
+    reaches GPT-4o generation without error.
+    """
+    await _ingest_po(await _first_po_name(), embedder, vs)
+
+    question = "What are the payment terms in the purchase orders?"
+
+    for strategy in ("hyde", "step_back"):
+        pipeline = _make_pipeline(embedder, vs, strategy=strategy)
+        result = pipeline.run(question)
+        assert result["answer"], f"Strategy {strategy!r} returned an empty answer"
+        assert isinstance(result["sources"], list), (
+            f"Strategy {strategy!r} did not return a sources list"
+        )
 
 
 # ===========================================================================
