@@ -18,6 +18,10 @@ import hmac
 import logging
 import os
 from contextlib import asynccontextmanager
+
+from dotenv import load_dotenv
+
+load_dotenv()
 from dataclasses import asdict
 from typing import Any
 
