@@ -150,3 +150,7 @@ Inputs, outputs, token counts, and latencies are logged per span. The Langfuse U
 - The `/ingest/full` endpoint is protected by `X-Admin-Secret` header
 - All secrets are loaded from environment variables; `.env` is gitignored
 - No user input is interpolated into Qdrant filter expressions directly — filters are constructed programmatically
+
+### Auth deferral — Phase 4 (current state)
+
+`POST /query` and the Streamlit frontend are **currently unauthenticated** — no ERPNext role check is enforced. This is intentional for the local development build. Full role-gated auth (Option A: HMAC internal token via Frappe whitelist, or Option B: OAuth2 + JWT) is documented in `docs/DEPLOYMENT.md` and will be wired in at Step 12/13 during Phase 6 (deployment). Do not expose the API on a public network without completing that step.
