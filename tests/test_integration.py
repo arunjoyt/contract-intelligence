@@ -59,10 +59,9 @@ def vs(embedder):
     store = VectorStore(collection=TEST_COLLECTION)
     store.ensure_collection()
     yield store
-    try:
+    import contextlib
+    with contextlib.suppress(Exception):
         store._client.delete_collection(TEST_COLLECTION)
-    except Exception:
-        pass
 
 
 # ---------------------------------------------------------------------------
@@ -410,9 +409,12 @@ def test_reranker_real_model_orders_candidates_by_relevance() -> None:
     r.warm_up()  # downloads model if not cached
 
     candidates = [
-        {"docname": "PO-001", "chunk_index": 0, "text": "payment terms net 30 days outstanding invoice supplier"},
-        {"docname": "CON-001", "chunk_index": 0, "text": "delivery schedule lead time logistics warehouse"},
-        {"docname": "SSC-001", "chunk_index": 0, "text": "supplier scorecard quality rating performance criteria"},
+        {"docname": "PO-001", "chunk_index": 0,
+         "text": "payment terms net 30 days outstanding invoice supplier"},
+        {"docname": "CON-001", "chunk_index": 0,
+         "text": "delivery schedule lead time logistics warehouse"},
+        {"docname": "SSC-001", "chunk_index": 0,
+         "text": "supplier scorecard quality rating performance criteria"},
     ]
     results = r.rerank("what are the payment terms", candidates, top_n=3)
 

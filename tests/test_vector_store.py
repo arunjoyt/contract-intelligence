@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -106,7 +106,8 @@ def test_upsert_chunks_multiple_chunks_same_doc(
     store: VectorStore, mock_qdrant_client: MagicMock
 ) -> None:
     chunks = [
-        {"docname": "CON-001", "chunk_index": i, "total_chunks": 3, "text": f"t{i}", "vector": [float(i)] * 1536}
+        {"docname": "CON-001", "chunk_index": i, "total_chunks": 3,
+         "text": f"t{i}", "vector": [float(i)] * 1536}
         for i in range(3)
     ]
 
@@ -121,7 +122,8 @@ def test_upsert_chunks_multiple_chunks_same_doc(
 def test_upsert_chunks_same_docname_chunk_produces_same_id(
     store: VectorStore, mock_qdrant_client: MagicMock
 ) -> None:
-    chunk = {"docname": "PO-999", "chunk_index": 2, "total_chunks": 5, "text": "x", "vector": [0.0] * 1536}
+    chunk = {"docname": "PO-999", "chunk_index": 2, "total_chunks": 5,
+             "text": "x", "vector": [0.0] * 1536}
 
     store.upsert_chunks([chunk])
     first_id = mock_qdrant_client.upsert.call_args.kwargs["points"][0].id
