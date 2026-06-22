@@ -18,7 +18,7 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -205,7 +205,7 @@ def evaluate(dataset_path: Path, output_path: Path) -> None:
     logger.info("Metrics: %s", metrics)
 
     output = {
-        "timestamp": datetime.now(datetime.UTC).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "dataset": str(dataset_path),
         "num_questions": len(samples),
         "metrics": metrics,
