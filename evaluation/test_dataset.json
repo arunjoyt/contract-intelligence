@@ -1,0 +1,138 @@
+[
+  {
+    "question": "Which purchase orders are currently in submitted status?",
+    "ground_truth_contexts": [
+      "Purchase Order PO-00001: Supplier: Alpha Supplies Ltd, Status: Submitted, Date: 2024-01-15, Company: Your Company, Total: 45000.00 INR, Items: Office Furniture x 10 units at 4500 each.",
+      "Purchase Order PO-00003: Supplier: Beta Tech Solutions, Status: Submitted, Date: 2024-01-20, Company: Your Company, Total: 120000.00 INR, Items: Laptop computers x 6 units at 20000 each.",
+      "Purchase Order PO-00007: Supplier: Gamma Office Needs, Status: Submitted, Date: 2024-02-01, Company: Your Company, Total: 8500.00 INR, Items: Stationery bundle x 17 units at 500 each."
+    ],
+    "ground_truth_answer": "PO-00001 (Alpha Supplies Ltd), PO-00003 (Beta Tech Solutions), and PO-00007 (Gamma Office Needs) are currently in submitted status."
+  },
+  {
+    "question": "What are the payment terms in the contract with Alpha Supplies Ltd?",
+    "ground_truth_contexts": [
+      "Contract CON-00001 with Alpha Supplies Ltd: Payment Terms: Net 30 days from invoice date. Late payment penalty of 1.5% per month applies after the due date. All payments to be made via bank transfer to the supplier's designated account.",
+      "Contract CON-00001 (Alpha Supplies Ltd): Duration: 2024-01-01 to 2024-12-31. Status: Active. Governing Law: Indian Contract Act. Dispute resolution via arbitration in Mumbai."
+    ],
+    "ground_truth_answer": "The contract with Alpha Supplies Ltd specifies Net 30 days payment terms from the invoice date, with a 1.5% per month late payment penalty."
+  },
+  {
+    "question": "What is the supplier scorecard rating for Beta Tech Solutions?",
+    "ground_truth_contexts": [
+      "Supplier Scorecard SC-00002 for Beta Tech Solutions: Overall Score: 82/100. Delivery Performance: 85% on-time delivery. Quality Rating: 4.1/5. Responsiveness: 4.0/5. Evaluation Period: Q4 2023. Standing: Good.",
+      "Supplier Scorecard SC-00002: Criteria weights — Delivery: 40%, Quality: 35%, Responsiveness: 25%. Beta Tech Solutions scored 34/40 on delivery, 28.35/35 on quality, and 20/25 on responsiveness."
+    ],
+    "ground_truth_answer": "Beta Tech Solutions has an overall supplier scorecard rating of 82/100, rated as Good, with strong delivery performance (85% on-time) and a quality rating of 4.1/5."
+  },
+  {
+    "question": "Which purchase invoices are unpaid?",
+    "ground_truth_contexts": [
+      "Purchase Invoice PINV-00004: Supplier: Gamma Office Needs, Status: Unpaid, Invoice Date: 2024-01-25, Due Date: 2024-02-24, Amount: 8500.00 INR.",
+      "Purchase Invoice PINV-00006: Supplier: Delta Logistics, Status: Unpaid, Invoice Date: 2024-02-05, Due Date: 2024-03-06, Amount: 32000.00 INR.",
+      "Purchase Invoice PINV-00009: Supplier: Alpha Supplies Ltd, Status: Unpaid, Invoice Date: 2024-02-10, Due Date: 2024-03-11, Amount: 45000.00 INR."
+    ],
+    "ground_truth_answer": "PINV-00004 (Gamma Office Needs, ₹8,500), PINV-00006 (Delta Logistics, ₹32,000), and PINV-00009 (Alpha Supplies Ltd, ₹45,000) are currently unpaid."
+  },
+  {
+    "question": "What contracts are currently active?",
+    "ground_truth_contexts": [
+      "Contract CON-00001: Supplier: Alpha Supplies Ltd, Status: Active, Start Date: 2024-01-01, End Date: 2024-12-31, Contract Value: 500000.00 INR.",
+      "Contract CON-00003: Supplier: Beta Tech Solutions, Status: Active, Start Date: 2024-03-01, End Date: 2025-02-28, Contract Value: 800000.00 INR.",
+      "Contract CON-00005: Supplier: Epsilon Services, Status: Active, Start Date: 2024-06-01, End Date: 2025-05-31, Contract Value: 150000.00 INR."
+    ],
+    "ground_truth_answer": "There are three active contracts: CON-00001 with Alpha Supplies Ltd (until Dec 2024), CON-00003 with Beta Tech Solutions (until Feb 2025), and CON-00005 with Epsilon Services (until May 2025)."
+  },
+  {
+    "question": "Show me purchase orders for Delta Logistics.",
+    "ground_truth_contexts": [
+      "Purchase Order PO-00005: Supplier: Delta Logistics, Status: Submitted, Date: 2024-01-28, Company: Your Company, Total: 32000.00 INR, Items: Freight service Q1 2024.",
+      "Purchase Order PO-00010: Supplier: Delta Logistics, Status: Draft, Date: 2024-02-15, Company: Your Company, Total: 28500.00 INR, Items: Freight service Q2 2024.",
+      "Purchase Order PO-00012: Supplier: Delta Logistics, Status: Submitted, Date: 2024-03-01, Company: Your Company, Total: 35000.00 INR, Items: Courier and last-mile delivery services March 2024."
+    ],
+    "ground_truth_answer": "Delta Logistics has three purchase orders: PO-00005 (₹32,000, submitted), PO-00010 (₹28,500, draft), and PO-00012 (₹35,000, submitted)."
+  },
+  {
+    "question": "What are the warranty and return terms in our contracts?",
+    "ground_truth_contexts": [
+      "Contract CON-00001 (Alpha Supplies Ltd) — Warranty clause: All goods supplied carry a 12-month warranty from date of delivery. Defective items must be reported within 7 days of receipt. Supplier shall replace or repair defective goods at no additional cost.",
+      "Contract CON-00003 (Beta Tech Solutions) — Returns policy: Hardware returns accepted within 30 days of delivery if defective. Software licenses are non-refundable once activated. RMA process must be initiated via the supplier's support portal.",
+      "Terms and Conditions TC-001: General return policy — goods may be returned within 14 days if they do not conform to the purchase order specifications. Return shipping costs borne by the supplier for defective goods."
+    ],
+    "ground_truth_answer": "Warranty and return terms vary by contract. Alpha Supplies provides a 12-month warranty with 7-day defect reporting. Beta Tech Solutions allows hardware returns within 30 days but no software refunds. General T&C allow returns within 14 days for non-conforming goods."
+  },
+  {
+    "question": "Which suppliers belong to the Raw Materials supplier group?",
+    "ground_truth_contexts": [
+      "Supplier Alpha Supplies Ltd: Supplier Group: Raw Materials, Country: India, Payment Terms: Net 30, Credit Limit: 600000.00 INR, Status: Active.",
+      "Supplier Zeta Commodities Pvt Ltd: Supplier Group: Raw Materials, Country: India, Payment Terms: Net 45, Credit Limit: 900000.00 INR, Status: Active.",
+      "Supplier Eta Resources Co: Supplier Group: Raw Materials, Country: India, Payment Terms: Net 60, Credit Limit: 450000.00 INR, Status: Active."
+    ],
+    "ground_truth_answer": "Alpha Supplies Ltd, Zeta Commodities Pvt Ltd, and Eta Resources Co belong to the Raw Materials supplier group."
+  },
+  {
+    "question": "What purchase orders were created in January 2024?",
+    "ground_truth_contexts": [
+      "Purchase Order PO-00001: Supplier: Alpha Supplies Ltd, Date: 2024-01-15, Status: Submitted, Total: 45000.00 INR.",
+      "Purchase Order PO-00002: Supplier: Zeta Commodities Pvt Ltd, Date: 2024-01-18, Status: Submitted, Total: 210000.00 INR.",
+      "Purchase Order PO-00003: Supplier: Beta Tech Solutions, Date: 2024-01-20, Status: Submitted, Total: 120000.00 INR.",
+      "Purchase Order PO-00004: Supplier: Eta Resources Co, Date: 2024-01-22, Status: Draft, Total: 75000.00 INR.",
+      "Purchase Order PO-00005: Supplier: Delta Logistics, Date: 2024-01-28, Status: Submitted, Total: 32000.00 INR."
+    ],
+    "ground_truth_answer": "Five purchase orders were created in January 2024: PO-00001 (Alpha Supplies, ₹45K), PO-00002 (Zeta Commodities, ₹210K), PO-00003 (Beta Tech, ₹120K), PO-00004 (Eta Resources, ₹75K draft), and PO-00005 (Delta Logistics, ₹32K)."
+  },
+  {
+    "question": "What is the total value of submitted purchase orders?",
+    "ground_truth_contexts": [
+      "Purchase Order PO-00001: Supplier: Alpha Supplies Ltd, Status: Submitted, Total: 45000.00 INR.",
+      "Purchase Order PO-00002: Supplier: Zeta Commodities Pvt Ltd, Status: Submitted, Total: 210000.00 INR.",
+      "Purchase Order PO-00003: Supplier: Beta Tech Solutions, Status: Submitted, Total: 120000.00 INR.",
+      "Purchase Order PO-00005: Supplier: Delta Logistics, Status: Submitted, Total: 32000.00 INR.",
+      "Purchase Order PO-00007: Supplier: Gamma Office Needs, Status: Submitted, Total: 8500.00 INR.",
+      "Purchase Order PO-00012: Supplier: Delta Logistics, Status: Submitted, Total: 35000.00 INR."
+    ],
+    "ground_truth_answer": "The total value of submitted purchase orders is ₹450,500 (45,000 + 210,000 + 120,000 + 32,000 + 8,500 + 35,000 INR)."
+  },
+  {
+    "question": "What are the delivery timelines specified in the contract with Beta Tech Solutions?",
+    "ground_truth_contexts": [
+      "Contract CON-00003 (Beta Tech Solutions) — Delivery Terms: Standard hardware delivery within 14 business days from purchase order date. Express delivery available at additional cost within 5 business days. Delivery to be made at buyer's registered address.",
+      "Contract CON-00003 (Beta Tech Solutions) — SLA: Software deployment within 30 days of contract signing. Technical support response time: P1 issues within 4 hours, P2 within 24 hours, P3 within 72 hours."
+    ],
+    "ground_truth_answer": "The Beta Tech Solutions contract specifies standard hardware delivery within 14 business days (or 5 business days for express), software deployment within 30 days, and SLA response times of 4 hours for P1, 24 hours for P2, and 72 hours for P3 issues."
+  },
+  {
+    "question": "Which contracts are expiring within the next 3 months?",
+    "ground_truth_contexts": [
+      "Contract CON-00001: Supplier: Alpha Supplies Ltd, Status: Active, Start Date: 2024-01-01, End Date: 2024-12-31, Contract Value: 500000.00 INR.",
+      "Contract CON-00002: Supplier: Theta Packaging Ltd, Status: Active, Start Date: 2024-01-01, End Date: 2024-10-31, Contract Value: 200000.00 INR.",
+      "Contract CON-00004: Supplier: Iota Cleaning Services, Status: Active, Start Date: 2023-11-01, End Date: 2024-10-31, Contract Value: 120000.00 INR."
+    ],
+    "ground_truth_answer": "Contracts CON-00002 with Theta Packaging Ltd and CON-00004 with Iota Cleaning Services are expiring on 2024-10-31, within the next 3 months. CON-00001 with Alpha Supplies Ltd expires on 2024-12-31."
+  },
+  {
+    "question": "What are the penalty clauses in our supplier contracts?",
+    "ground_truth_contexts": [
+      "Contract CON-00001 (Alpha Supplies Ltd) — Penalty clause: Delayed delivery beyond agreed timeline incurs a penalty of 0.5% of the order value per day, capped at 10% of total contract value.",
+      "Contract CON-00003 (Beta Tech Solutions) — Liquidated damages: SLA breaches attract LD of 2% of monthly contract value per breach instance. Repeated breaches (3+ in a quarter) may result in contract termination.",
+      "Terms and Conditions TC-001 — General penalty terms: Supplier is liable for direct losses caused by non-performance. Force majeure events exempt the supplier from penalty for the duration of the event."
+    ],
+    "ground_truth_answer": "Penalty clauses vary: Alpha Supplies charges 0.5% per day for late delivery (max 10% of contract). Beta Tech Solutions applies 2% LD per SLA breach with termination rights for repeated breaches. General T&C exempt suppliers during force majeure."
+  },
+  {
+    "question": "What is the scorecard standing for suppliers with a score below 70?",
+    "ground_truth_contexts": [
+      "Supplier Scorecard SC-00005 for Iota Cleaning Services: Overall Score: 62/100. Delivery Performance: 70% on-time. Quality Rating: 3.1/5. Responsiveness: 3.0/5. Evaluation Period: Q4 2023. Standing: Poor.",
+      "Supplier Scorecard SC-00007 for Theta Packaging Ltd: Overall Score: 65/100. Delivery Performance: 68% on-time. Quality Rating: 3.3/5. Responsiveness: 3.2/5. Evaluation Period: Q4 2023. Standing: Needs Improvement."
+    ],
+    "ground_truth_answer": "Two suppliers have scorecard scores below 70: Iota Cleaning Services (62/100, Poor) and Theta Packaging Ltd (65/100, Needs Improvement). Both show weak delivery performance below 70%."
+  },
+  {
+    "question": "What items were ordered in the most recent purchase orders?",
+    "ground_truth_contexts": [
+      "Purchase Order PO-00012: Supplier: Delta Logistics, Date: 2024-03-01, Status: Submitted, Items: Courier and last-mile delivery services for March 2024, Total: 35000.00 INR.",
+      "Purchase Order PO-00011: Supplier: Zeta Commodities Pvt Ltd, Date: 2024-02-28, Status: Submitted, Items: Steel rods 500 kg at 180/kg, Copper wire 200 m at 150/m, Total: 120000.00 INR.",
+      "Purchase Order PO-00010: Supplier: Delta Logistics, Date: 2024-02-15, Status: Draft, Items: Freight forwarding services Q2 2024, Total: 28500.00 INR."
+    ],
+    "ground_truth_answer": "The most recent purchase orders include PO-00012 for courier services from Delta Logistics (March 2024), PO-00011 for steel rods and copper wire from Zeta Commodities (Feb 2024), and PO-00010 for freight forwarding from Delta Logistics (Feb 2024, draft)."
+  }
+]
