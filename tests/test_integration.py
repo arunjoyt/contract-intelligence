@@ -6,6 +6,8 @@ Skipped in CI automatically; run manually with:
     RUN_INTEGRATION=1 pytest tests/test_integration.py -m ingestion -v
     RUN_INTEGRATION=1 pytest tests/test_integration.py -m retrieval -v
     RUN_INTEGRATION=1 pytest tests/test_integration.py -m pipeline -v
+    RUN_INTEGRATION=1 pytest tests/test_integration.py -m api -v
+    RUN_INTEGRATION=1 pytest tests/test_integration.py -m evaluation -v
 
 Services needed for Groups 1-3:
     ERPNext  — http://127.0.0.1:8005  (credentials in .env)
@@ -14,6 +16,9 @@ Services needed for Groups 1-3:
 
 Group 4 tests the API layer (Step 12 — api/main.py).
 Services needed: Qdrant + ERPNext + OpenAI (same as Groups 1-3).
+
+Group 5 tests the evaluation script (Step 14 — evaluation/evaluate.py).
+Services needed: Qdrant + OpenAI (ERPNext not required — test dataset is self-contained).
 
 A dedicated Qdrant collection (procurement_integration_test) is created at
 session start and deleted on teardown — the production collection is untouched.
@@ -685,3 +690,105 @@ async def test_query_endpoint_returns_answer_and_sources(
         f"Expected citations or fallback phrase; got: {data['answer']!r}"
     )
     assert isinstance(data["sources"], list)
+
+
+# ===========================================================================
+# GROUP 5 — Evaluation script (Step 14 — evaluation/evaluate.py)
+# Services: Qdrant + OpenAI  (ERPNext not required — dataset is self-contained)
+# ===========================================================================
+
+
+@pytest.fixture(scope="session")
+def eval_results(tmp_path_factory, vs):
+    """Run evaluate.py once per session and return the output path.
+
+    Depends on ``vs`` only to guarantee the test Qdrant collection exists.
+    No manual seeding is needed: evaluate.py falls back to ground-truth
+    contexts when the collection is empty, so the script still produces a
+    valid results.json in all cases.
+    """
+    from pathlib import Path
+
+    from evaluation.evaluate import evaluate as run_evaluate
+
+    dataset_path = Path("evaluation/test_dataset.json")
+    output_path = tmp_path_factory.mktemp("eval") / "results.json"
+
+    original = os.environ.get("QDRANT_COLLECTION")
+    os.environ["QDRANT_COLLECTION"] = TEST_COLLECTION
+    try:
+        run_evaluate(dataset_path, output_path)
+    finally:
+        if original is None:
+            os.environ.pop("QDRANT_COLLECTION", None)
+        else:
+            os.environ["QDRANT_COLLECTION"] = original
+
+    return output_path
+
+
+@live
+@pytest.mark.evaluation
+def test_evaluate_writes_results_json(eval_results) -> None:
+    """evaluate.py must produce a non-empty results.json at the requested path."""
+    assert eval_results.exists(), "evaluate.py did not write results.json"
+    assert eval_results.stat().st_size > 0, "results.json is empty"
+
+
+@live
+@pytest.mark.evaluation
+def test_evaluate_results_json_has_required_keys(eval_results) -> None:
+    """results.json must contain the expected top-level structure."""
+    import json
+
+    data = json.loads(eval_results.read_text())
+    for key in ("timestamp", "num_questions", "metrics", "per_question"):
+        assert key in data, f"Missing top-level key '{key}' in results.json"
+
+
+@live
+@pytest.mark.evaluation
+def test_evaluate_metrics_are_in_valid_range(eval_results) -> None:
+    """All four RAGAS metrics must be floats in [0.0, 1.0]."""
+    import json
+
+    metrics = json.loads(eval_results.read_text())["metrics"]
+    expected = {"faithfulness", "answer_relevancy", "context_recall", "context_precision"}
+
+    assert set(metrics.keys()) == expected, (
+        f"Expected metric keys {expected}, got {set(metrics.keys())}"
+    )
+    for name, value in metrics.items():
+        assert isinstance(value, float), f"Metric '{name}' is not a float: {value!r}"
+        assert 0.0 <= value <= 1.0, f"Metric '{name}' = {value} is outside [0.0, 1.0]"
+
+
+@live
+@pytest.mark.evaluation
+def test_evaluate_per_question_count_matches_dataset(eval_results) -> None:
+    """per_question length must match num_questions, and at least one question answered."""
+    import json
+    from pathlib import Path
+
+    data = json.loads(eval_results.read_text())
+    dataset_len = len(json.loads(Path("evaluation/test_dataset.json").read_text()))
+
+    assert 0 < data["num_questions"] <= dataset_len, (
+        f"num_questions={data['num_questions']} not in (0, {dataset_len}]"
+    )
+    assert len(data["per_question"]) == data["num_questions"], (
+        "per_question list length does not match num_questions"
+    )
+
+
+@live
+@pytest.mark.evaluation
+def test_evaluate_per_question_entries_have_required_fields(eval_results) -> None:
+    """Every per_question entry must have non-empty question and answer fields."""
+    import json
+
+    for i, entry in enumerate(json.loads(eval_results.read_text())["per_question"]):
+        assert "question" in entry, f"Entry {i} missing 'question'"
+        assert "answer" in entry, f"Entry {i} missing 'answer'"
+        assert "retrieved_context_count" in entry, f"Entry {i} missing 'retrieved_context_count'"
+        assert entry["answer"], f"Entry {i} has an empty answer"
