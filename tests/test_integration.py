@@ -8,6 +8,7 @@ Skipped in CI automatically; run manually with:
     RUN_INTEGRATION=1 pytest tests/test_integration.py -m pipeline -v
     RUN_INTEGRATION=1 pytest tests/test_integration.py -m api -v
     RUN_INTEGRATION=1 pytest tests/test_integration.py -m evaluation -v
+    RUN_INTEGRATION=1 pytest tests/test_integration.py -m langfuse -v
 
 Services needed for Groups 1-3:
     ERPNext  — http://127.0.0.1:8005  (credentials in .env)
@@ -19,6 +20,10 @@ Services needed: Qdrant + ERPNext + OpenAI (same as Groups 1-3).
 
 Group 5 tests the evaluation script (Step 14 — evaluation/evaluate.py).
 Services needed: Qdrant + OpenAI (ERPNext not required — test dataset is self-contained).
+
+Group 7 tests Langfuse observability end-to-end (see docs/ARCHITECTURE.md § Observability).
+Services needed: Qdrant + OpenAI + a live Langfuse server (LANGFUSE_PUBLIC_KEY,
+LANGFUSE_SECRET_KEY, LANGFUSE_HOST in .env).
 
 A dedicated Qdrant collection (procurement_integration_test) is created at
 session start and deleted on teardown — the production collection is untouched.

@@ -61,7 +61,22 @@ async def _lifespan(app: FastAPI):
     reranker.warm_up()
 
     rewriter = QueryRewriter(embedder=embedder)
-    pipeline = QueryPipeline(rewriter=rewriter, hybrid_search=hybrid_search, reranker=reranker)
+
+    lf = None
+    lf_public = os.environ.get("LANGFUSE_PUBLIC_KEY")
+    lf_secret = os.environ.get("LANGFUSE_SECRET_KEY")
+    if lf_public and lf_secret:
+        from langfuse import Langfuse
+        lf = Langfuse(
+            public_key=lf_public,
+            secret_key=lf_secret,
+            host=os.environ.get("LANGFUSE_HOST", "http://localhost:3000"),
+        )
+        logger.info("Langfuse tracing enabled")
+    else:
+        logger.warning("LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY not set — tracing disabled")
+
+    pipeline = QueryPipeline(rewriter=rewriter, hybrid_search=hybrid_search, reranker=reranker, langfuse=lf)
 
     erpnext_client = ERPNextClient()
 
@@ -75,6 +90,8 @@ async def _lifespan(app: FastAPI):
 
     yield
 
+    if lf:
+        lf.flush()
     await erpnext_client.aclose()
 
 
