@@ -18,13 +18,10 @@ import hmac
 import logging
 import os
 from contextlib import asynccontextmanager
-
-from dotenv import load_dotenv
-
-load_dotenv()
 from dataclasses import asdict
 from typing import Any
 
+from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
 
@@ -37,6 +34,8 @@ from pipeline.query_rewriter import QueryRewriter
 from retrieval.hybrid_search import HybridSearch
 from retrieval.reranker import Reranker
 from retrieval.vector_store import VectorStore
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +75,9 @@ async def _lifespan(app: FastAPI):
     else:
         logger.warning("LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY not set — tracing disabled")
 
-    pipeline = QueryPipeline(rewriter=rewriter, hybrid_search=hybrid_search, reranker=reranker, langfuse=lf)
+    pipeline = QueryPipeline(
+        rewriter=rewriter, hybrid_search=hybrid_search, reranker=reranker, langfuse=lf
+    )
 
     erpnext_client = ERPNextClient()
 

@@ -1,0 +1,67 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse
+      POSTGRES_DB: langfuse
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  langfuse:
+    image: langfuse/langfuse:2
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse@postgres:5432/langfuse
+      NEXTAUTH_SECRET: changeme-nextauth-secret
+      SALT: changeme-salt
+      NEXTAUTH_URL: http://localhost:3000
+      TELEMETRY_ENABLED: "false"
+      # Auto-seed a project so LANGFUSE_PUBLIC_KEY / SECRET_KEY work immediately
+      LANGFUSE_INIT_ORG_ID: procurement-org
+      LANGFUSE_INIT_ORG_NAME: Procurement
+      LANGFUSE_INIT_PROJECT_ID: procurement-project
+      LANGFUSE_INIT_PROJECT_NAME: procurement-rag
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: lf-pk-local
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: lf-sk-local
+      LANGFUSE_INIT_USER_EMAIL: admin@localhost
+      LANGFUSE_INIT_USER_NAME: Admin
+      LANGFUSE_INIT_USER_PASSWORD: changeme
+    ports:
+      - "3000:3000"
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+
+  app:
+    build: .
+    depends_on:
+      - qdrant
+      - langfuse
+    env_file: .env
+    environment:
+      # Override to use container service names instead of localhost
+      QDRANT_URL: http://qdrant:6333
+      LANGFUSE_HOST: http://langfuse:3000
+      LANGFUSE_PUBLIC_KEY: lf-pk-local
+      LANGFUSE_SECRET_KEY: lf-sk-local
+    ports:
+      - "8000:8000"
+
+volumes:
+  pg_data:
+  qdrant_data:

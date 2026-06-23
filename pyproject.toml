@@ -33,4 +33,6 @@ markers = [
     "pipeline: marks pipeline-layer integration tests (OpenAI + Qdrant, no ERPNext required for some)",
     "api: marks API-layer integration tests (requires uvicorn app via TestClient + all services)",
     "evaluation: marks evaluation-layer integration tests (runs evaluate.py against live services)",
+    "docker: marks Docker Compose full-stack integration tests (requires docker compose up)",
+    "langfuse: marks Langfuse observability integration tests (requires live Langfuse server)",
 ]
