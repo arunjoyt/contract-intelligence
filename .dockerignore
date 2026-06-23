@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.env.local
+.mypy_cache/
+.git/
+.github/
+evaluation/results.json
+tests/

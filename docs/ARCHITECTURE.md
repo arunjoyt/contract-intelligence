@@ -136,13 +136,31 @@ Metadata filters (supplier, doctype, status) apply **only to the Qdrant vector-s
 ## Observability
 
 Every query creates a Langfuse trace with the following spans:
-- `query_rewrite`
-- `metadata_filter_extraction`
-- `hybrid_search`
-- `rerank`
-- `llm_generation`
 
-Inputs, outputs, token counts, and latencies are logged per span. The Langfuse UI is accessible at `http://localhost:3000`.
+| Span | Input captured | Output captured |
+|---|---|---|
+| `rewrite` | original question | rewritten text + query vector |
+| `filter_extraction` | original question | `{source_doctype?, status?}` dict |
+| `hybrid_search` | rewritten query + filters | list of 20 scored chunks |
+| `rerank` | original question + 20 candidates | top-5 re-scored chunks |
+| `generate` | original question + context string | answer with `[docname]` citations |
+
+The trace root carries `input.question` and `output.{answer, source_count}`. If any step raises, the failing span and the root trace are both updated with `level="ERROR"`.
+
+The Langfuse UI is accessible at `http://localhost:3000` (default docker-compose port).
+
+### How to verify in the Langfuse UI
+
+1. Start all services including Langfuse: `docker compose up qdrant langfuse postgres -d`
+2. Open `http://localhost:3000` → log in (credentials from `.env`: `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`)
+3. Run the API with Langfuse wired in: `uvicorn api.main:app --reload`
+4. Send a query: `curl -s -X POST http://localhost:8000/query -H 'Content-Type: application/json' -d '{"question":"What are the payment terms for our active contracts?"}'`
+5. In the Langfuse UI → **Traces** → select the new trace and verify:
+   - Root trace `name` is `query`; `input.question` matches the sent question
+   - Five child spans appear: `rewrite`, `filter_extraction`, `hybrid_search`, `rerank`, `generate`
+   - Each span has a non-zero duration and no error level
+   - Root trace `output.answer` is non-empty and contains at least one `[docname]`-style citation
+   - On a forced error, `level` is `ERROR` on the failing span and propagates to the root trace
 
 ## Security Notes
 

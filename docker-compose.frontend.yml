@@ -1,0 +1,10 @@
+services:
+  frontend:
+    build: .
+    command: streamlit run frontend/app.py --server.port 8501 --server.address 0.0.0.0
+    depends_on:
+      - app
+    environment:
+      BACKEND_URL: http://app:8000
+    ports:
+      - "8501:8501"

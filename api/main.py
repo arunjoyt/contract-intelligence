@@ -18,13 +18,10 @@ import hmac
 import logging
 import os
 from contextlib import asynccontextmanager
-
-from dotenv import load_dotenv
-
-load_dotenv()
 from dataclasses import asdict
 from typing import Any
 
+from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
 
@@ -37,6 +34,8 @@ from pipeline.query_rewriter import QueryRewriter
 from retrieval.hybrid_search import HybridSearch
 from retrieval.reranker import Reranker
 from retrieval.vector_store import VectorStore
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +60,24 @@ async def _lifespan(app: FastAPI):
     reranker.warm_up()
 
     rewriter = QueryRewriter(embedder=embedder)
-    pipeline = QueryPipeline(rewriter=rewriter, hybrid_search=hybrid_search, reranker=reranker)
+
+    lf = None
+    lf_public = os.environ.get("LANGFUSE_PUBLIC_KEY")
+    lf_secret = os.environ.get("LANGFUSE_SECRET_KEY")
+    if lf_public and lf_secret:
+        from langfuse import Langfuse
+        lf = Langfuse(
+            public_key=lf_public,
+            secret_key=lf_secret,
+            host=os.environ.get("LANGFUSE_HOST", "http://localhost:3000"),
+        )
+        logger.info("Langfuse tracing enabled")
+    else:
+        logger.warning("LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY not set — tracing disabled")
+
+    pipeline = QueryPipeline(
+        rewriter=rewriter, hybrid_search=hybrid_search, reranker=reranker, langfuse=lf
+    )
 
     erpnext_client = ERPNextClient()
 
@@ -75,6 +91,8 @@ async def _lifespan(app: FastAPI):
 
     yield
 
+    if lf:
+        lf.flush()
     await erpnext_client.aclose()
 
 
