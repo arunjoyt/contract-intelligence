@@ -797,3 +797,327 @@ def test_evaluate_per_question_entries_have_required_fields(eval_results) -> Non
         assert "answer" in entry, f"Entry {i} missing 'answer'"
         assert "retrieved_context_count" in entry, f"Entry {i} missing 'retrieved_context_count'"
         assert entry["answer"], f"Entry {i} has an empty answer"
+
+
+# ---------------------------------------------------------------------------
+# Group 6 — Docker Compose full-stack
+# ---------------------------------------------------------------------------
+
+_DOCKER_APP_URL = "http://localhost:8000"
+_DOCKER_FRONTEND_URL = "http://localhost:8501"
+
+
+@pytest.fixture(scope="module")
+def docker_app():
+    """Skip the group if the containerised app is not reachable."""
+    import httpx
+
+    try:
+        httpx.get(f"{_DOCKER_APP_URL}/health", timeout=3).raise_for_status()
+    except Exception:
+        pytest.skip("Docker stack not running — start with: docker compose up -d")
+    return _DOCKER_APP_URL
+
+
+@live
+@pytest.mark.docker
+def test_docker_health_returns_ok(docker_app) -> None:
+    import httpx
+
+    r = httpx.get(f"{docker_app}/health")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok"}
+
+
+@live
+@pytest.mark.docker
+def test_docker_query_returns_answer_and_sources(docker_app) -> None:
+    import httpx
+
+    r = httpx.post(
+        f"{docker_app}/query",
+        json={"question": "What purchase orders are active?"},
+        timeout=60,
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert "answer" in data and isinstance(data["answer"], str) and data["answer"]
+    assert "sources" in data and isinstance(data["sources"], list)
+
+
+@live
+@pytest.mark.docker
+def test_docker_ingest_full_rejects_missing_secret(docker_app) -> None:
+    import httpx
+
+    r = httpx.post(f"{docker_app}/ingest/full")
+    assert r.status_code == 403
+
+
+@live
+@pytest.mark.docker
+def test_docker_ingest_full_accepts_valid_secret(docker_app) -> None:
+    import httpx
+
+    admin_secret = os.getenv("ADMIN_SECRET", "")
+    if not admin_secret:
+        pytest.skip("ADMIN_SECRET not set in .env")
+    r = httpx.post(f"{docker_app}/ingest/full", headers={"X-Admin-Secret": admin_secret})
+    # Background ingest is accepted; full completion depends on ERPNext being
+    # reachable from inside the container (ERPNEXT_URL must be a routable host,
+    # not 127.0.0.1, when running via docker compose).
+    assert r.status_code == 202
+    assert r.json() == {"status": "accepted"}
+
+
+@live
+@pytest.mark.docker
+def test_docker_frontend_returns_200() -> None:
+    import httpx
+
+    try:
+        r = httpx.get(_DOCKER_FRONTEND_URL, timeout=10)
+    except Exception:
+        pytest.skip(
+            "Frontend not running — start with: "
+            "docker compose -f docker-compose.yml -f docker-compose.frontend.yml up -d"
+        )
+    assert r.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Group 7 — Langfuse observability
+# ---------------------------------------------------------------------------
+
+_LF_HOST = os.getenv("LANGFUSE_HOST", "http://localhost:3000")
+_LF_PUBLIC = os.getenv("LANGFUSE_PUBLIC_KEY", "lf-pk-local")
+_LF_SECRET = os.getenv("LANGFUSE_SECRET_KEY", "lf-sk-local")
+
+_EXPECTED_SPANS = {"rewrite", "filter_extraction", "hybrid_search", "rerank", "generate"}
+
+
+def _lf_headers() -> dict:
+    import base64
+
+    creds = base64.b64encode(f"{_LF_PUBLIC}:{_LF_SECRET}".encode()).decode()
+    return {"Authorization": f"Basic {creds}"}
+
+
+def _fetch_trace(trace_id: str) -> dict:
+    import time
+
+    import httpx
+
+    for _ in range(6):
+        try:
+            r = httpx.get(
+                f"{_LF_HOST}/api/public/traces/{trace_id}",
+                headers=_lf_headers(),
+                timeout=10,
+            )
+            if r.status_code == 200:
+                return r.json()
+        except Exception:
+            pass
+        time.sleep(1)
+    pytest.fail(f"Trace {trace_id} not found in Langfuse after retries")
+
+
+def _fetch_observations(trace_id: str) -> list[dict]:
+    import httpx
+
+    r = httpx.get(
+        f"{_LF_HOST}/api/public/observations",
+        params={"traceId": trace_id},
+        headers=_lf_headers(),
+        timeout=10,
+    )
+    r.raise_for_status()
+    return r.json().get("data", [])
+
+
+@pytest.fixture(scope="module")
+def lf_instance():
+    """Live Langfuse client — skip group if server is not reachable."""
+    import httpx
+
+    try:
+        httpx.get(f"{_LF_HOST}/api/public/health", timeout=3).raise_for_status()
+    except Exception:
+        pytest.skip(
+            "Langfuse not running — start with: "
+            "docker compose up qdrant langfuse postgres -d"
+        )
+    from langfuse import Langfuse
+
+    lf = Langfuse(public_key=_LF_PUBLIC, secret_key=_LF_SECRET, host=_LF_HOST)
+    yield lf
+    lf.flush()
+
+
+@pytest.fixture(scope="module")
+def lf_pipeline(embedder, vs, lf_instance):
+    from pipeline.query_pipeline import QueryPipeline
+    from pipeline.query_rewriter import QueryRewriter
+    from retrieval.hybrid_search import HybridSearch
+    from retrieval.reranker import Reranker
+
+    hs = HybridSearch(embedder=embedder, vector_store=vs)
+    hs.build_bm25_index(vs.get_all_texts())
+    reranker = Reranker()
+    reranker.warm_up()
+    rewriter = QueryRewriter(embedder=embedder)
+    return QueryPipeline(
+        rewriter=rewriter, hybrid_search=hs, reranker=reranker, langfuse=lf_instance
+    )
+
+
+@pytest.fixture(scope="module")
+def lf_trace_result(lf_pipeline, lf_instance):
+    """Run the pipeline once and capture the trace ID for downstream tests."""
+    import time
+
+    question = "What are the payment terms for our active contracts?"
+    captured: dict = {}
+    _orig = lf_instance.trace
+
+    def _capturing(**kwargs):
+        t = _orig(**kwargs)
+        captured["id"] = t.id
+        return t
+
+    lf_instance.trace = _capturing
+    try:
+        result = lf_pipeline.run(question)
+    finally:
+        lf_instance.trace = _orig
+
+    lf_instance.flush()
+    time.sleep(2)  # allow server-side event processing
+    return captured["id"], question, result
+
+
+@live
+@pytest.mark.langfuse
+def test_langfuse_trace_created_for_query(lf_trace_result) -> None:
+    trace_id, question, _ = lf_trace_result
+    trace = _fetch_trace(trace_id)
+    assert trace["name"] == "query"
+    assert trace.get("input", {}).get("question") == question
+
+
+@live
+@pytest.mark.langfuse
+def test_langfuse_trace_has_all_five_spans(lf_trace_result) -> None:
+    trace_id, _, _ = lf_trace_result
+    obs = _fetch_observations(trace_id)
+    span_names = {o["name"] for o in obs}
+    missing = _EXPECTED_SPANS - span_names
+    assert not missing, f"Missing spans in trace: {missing}"
+
+
+@live
+@pytest.mark.langfuse
+def test_langfuse_trace_output_contains_answer_and_source_count(lf_trace_result) -> None:
+    trace_id, _, result = lf_trace_result
+    trace = _fetch_trace(trace_id)
+    output = trace.get("output") or {}
+    assert "answer" in output, "Trace output missing 'answer'"
+    assert "source_count" in output, "Trace output missing 'source_count'"
+    assert isinstance(output["source_count"], int) and output["source_count"] >= 0
+
+
+@live
+@pytest.mark.langfuse
+def test_langfuse_error_span_and_trace_marked_error(embedder, vs, lf_instance) -> None:
+    """A pipeline that fails at generate marks the span and root trace ERROR."""
+    import time
+
+    from pipeline.query_pipeline import QueryPipeline
+    from pipeline.query_rewriter import QueryRewriter
+    from retrieval.hybrid_search import HybridSearch
+    from retrieval.reranker import Reranker
+
+    hs = HybridSearch(embedder=embedder, vector_store=vs)
+    hs.build_bm25_index(vs.get_all_texts())
+    rewriter = QueryRewriter(embedder=embedder)
+    reranker = Reranker()
+
+    # Invalid key only for the generation client; rewriter uses env var key
+    bad_pipeline = QueryPipeline(
+        rewriter=rewriter,
+        hybrid_search=hs,
+        reranker=reranker,
+        api_key="sk-invalid-key-for-error-testing",
+        langfuse=lf_instance,
+    )
+
+    captured: dict = {}
+    _orig = lf_instance.trace
+
+    def _capturing(**kwargs):
+        t = _orig(**kwargs)
+        captured["id"] = t.id
+        return t
+
+    lf_instance.trace = _capturing
+    try:
+        with pytest.raises(Exception):  # noqa: B017
+            bad_pipeline.run("Will this trigger an error trace?")
+    finally:
+        lf_instance.trace = _orig
+
+    lf_instance.flush()
+    time.sleep(2)
+
+    trace_id = captured["id"]
+    trace = _fetch_trace(trace_id)
+    assert trace.get("level") == "ERROR", f"Expected ERROR on trace, got: {trace.get('level')}"
+
+    obs = _fetch_observations(trace_id)
+    error_obs = [o for o in obs if o.get("level") == "ERROR"]
+    assert error_obs, "No ERROR-level observation found in the error trace"
+
+
+@live
+@pytest.mark.langfuse
+def test_api_startup_wires_langfuse_when_credentials_present(vs, lf_instance) -> None:
+    """TestClient app with LANGFUSE_* vars set produces a trace for POST /query."""
+    import time
+
+    from fastapi.testclient import TestClient
+
+    from api.main import app
+
+    orig_collection = os.environ.get("QDRANT_COLLECTION")
+    os.environ["QDRANT_COLLECTION"] = TEST_COLLECTION
+    os.environ["LANGFUSE_PUBLIC_KEY"] = _LF_PUBLIC
+    os.environ["LANGFUSE_SECRET_KEY"] = _LF_SECRET
+    os.environ["LANGFUSE_HOST"] = _LF_HOST
+
+    try:
+        with TestClient(app) as client:
+            r = client.post("/query", json={"question": "List all active purchase orders."})
+    finally:
+        if orig_collection is None:
+            os.environ.pop("QDRANT_COLLECTION", None)
+        else:
+            os.environ["QDRANT_COLLECTION"] = orig_collection
+
+    assert r.status_code == 200
+    time.sleep(2)
+
+    import httpx
+
+    r2 = httpx.get(
+        f"{_LF_HOST}/api/public/traces",
+        params={"name": "query", "limit": 5},
+        headers=_lf_headers(),
+        timeout=10,
+    )
+    r2.raise_for_status()
+    traces = r2.json().get("data", [])
+    assert any(
+        t.get("input", {}).get("question") == "List all active purchase orders."
+        for t in traces
+    ), "No matching trace found in Langfuse for the API startup test query"
