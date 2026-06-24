@@ -69,7 +69,7 @@ async def _lifespan(app: FastAPI):
         lf = Langfuse(
             public_key=lf_public,
             secret_key=lf_secret,
-            host=os.environ.get("LANGFUSE_HOST", "http://localhost:3000"),
+            host=os.environ.get("LANGFUSE_HOST"),
         )
         logger.info("Langfuse tracing enabled")
     else:
@@ -157,7 +157,7 @@ async def webhook_erpnext(request: Request) -> dict[str, str]:
         rebuild_bm25=lambda: app.state.hybrid_search.build_bm25_index(
             app.state.vector_store.get_all_texts()
         ),
-        webhook_secret=os.environ.get("WEBHOOK_SECRET", ""),
+        webhook_secret=os.environ.get("WEBHOOK_SECRET") or "",
     )
 
 
@@ -220,6 +220,6 @@ async def _run_full_ingest(
 
 
 def _check_admin_secret(provided: str | None) -> None:
-    expected = os.environ.get("ADMIN_SECRET", "")
+    expected = os.environ.get("ADMIN_SECRET") or ""
     if not expected or not provided or not hmac.compare_digest(expected, provided):
         raise HTTPException(status_code=403, detail="Invalid or missing admin secret")
