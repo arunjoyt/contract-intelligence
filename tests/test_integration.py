@@ -575,6 +575,8 @@ async def test_hyde_and_step_back_strategies_both_return_answers(embedder, vs) -
 
 # ===========================================================================
 # GROUP 4 — API layer (Step 12 — api/main.py)
+# TODO(#27): rewrite to use the Docker app via httpx (like Groups 6+7) instead
+# of FastAPI TestClient, which requires all project deps installed locally.
 # ===========================================================================
 
 
