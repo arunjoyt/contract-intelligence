@@ -122,11 +122,16 @@ class QueryPipeline:
             )
 
             context = _build_context(top_chunks)
-            answer = self._span(
-                trace,
-                "generate",
-                lambda: self._generate(question, context),
-            )
+            if trace:
+                gen_span = trace.span(name="generate")
+                try:
+                    answer = self._generate(question, context)
+                    gen_span.end(output=answer)
+                except Exception:
+                    gen_span.end(level="ERROR")
+                    raise
+            else:
+                answer = self._generate(question, context)
 
             sources = _parse_sources(answer, top_chunks)
 

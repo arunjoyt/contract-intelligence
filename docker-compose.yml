@@ -33,7 +33,7 @@ services:
       LANGFUSE_INIT_PROJECT_NAME: procurement-rag
       LANGFUSE_INIT_PROJECT_PUBLIC_KEY: lf-pk-local
       LANGFUSE_INIT_PROJECT_SECRET_KEY: lf-sk-local
-      LANGFUSE_INIT_USER_EMAIL: admin@localhost
+      LANGFUSE_INIT_USER_EMAIL: admin@localhost.local
       LANGFUSE_INIT_USER_NAME: Admin
       LANGFUSE_INIT_USER_PASSWORD: changeme
     ports:
