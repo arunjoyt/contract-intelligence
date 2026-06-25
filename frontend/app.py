@@ -10,8 +10,11 @@ import os
 
 import httpx
 import streamlit as st
+from dotenv import load_dotenv
 
-BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000")
+load_dotenv()
+
+BACKEND_URL = os.environ["BACKEND_URL"]
 _MAX_HISTORY = 10
 _DOCTYPES = ["Purchase Order", "Purchase Invoice", "Contract", "Supplier Scorecard"]
 

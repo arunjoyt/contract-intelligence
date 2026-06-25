@@ -15,8 +15,8 @@ Services needed for Groups 1-3:
     Qdrant   — http://localhost:6333
     OpenAI   — OPENAI_API_KEY in .env
 
-Group 4 tests the API layer (Step 12 — api/main.py).
-Services needed: Qdrant + ERPNext + OpenAI (same as Groups 1-3).
+Group 4 tests the API layer (Step 12 — api/main.py) via the containerised app.
+Services needed: Docker app (localhost:8000) + Qdrant (localhost:6333) + ERPNext + OpenAI.
 
 Group 5 tests the evaluation script (Step 14 — evaluation/evaluate.py).
 Services needed: Qdrant + OpenAI (ERPNext not required — test dataset is self-contained).
@@ -575,74 +575,105 @@ async def test_hyde_and_step_back_strategies_both_return_answers(embedder, vs) -
 
 # ===========================================================================
 # GROUP 4 — API layer (Step 12 — api/main.py)
+# Services: Docker app (localhost:8000) + Qdrant (localhost:6333) + ERPNext + OpenAI
+# All tests use plain httpx against the running Docker stack — no TestClient.
 # ===========================================================================
 
+_G4_APP_URL = os.getenv("API_URL", "http://localhost:8000")
+_G4_QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+_G4_COLLECTION = os.getenv("QDRANT_COLLECTION", "procurement")
 
-@pytest.fixture(scope="session")
-def api_client(vs):
-    """Session-scoped TestClient wired to the live test Qdrant collection.
 
-    Depends on ``vs`` so the test collection is created before the app
-    lifespan runs and torn down after the client closes.
-    """
-    import os
+def _g4_collection_count() -> int:
+    """Return the point count for the production Qdrant collection, or 0 on error."""
+    import httpx
 
-    from fastapi.testclient import TestClient
-
-    from api.main import app
-
-    original = os.environ.get("QDRANT_COLLECTION")
-    os.environ["QDRANT_COLLECTION"] = TEST_COLLECTION
     try:
-        with TestClient(app) as client:
-            yield client
-    finally:
-        if original is None:
-            os.environ.pop("QDRANT_COLLECTION", None)
-        else:
-            os.environ["QDRANT_COLLECTION"] = original
+        r = httpx.get(f"{_G4_QDRANT_URL}/collections/{_G4_COLLECTION}", timeout=5)
+        if r.status_code == 200:
+            return r.json().get("result", {}).get("points_count", 0)
+    except Exception:
+        pass
+    return 0
+
+
+@pytest.fixture(scope="module")
+def api_http():
+    """Skip the group if the containerised app is not reachable."""
+    import httpx
+
+    try:
+        httpx.get(f"{_G4_APP_URL}/health", timeout=3).raise_for_status()
+    except Exception:
+        pytest.skip("App not running — start with: docker compose up -d")
+    return _G4_APP_URL
 
 
 @live
 @pytest.mark.api
-def test_health_endpoint_returns_ok(api_client) -> None:
-    resp = api_client.get("/health")
-    assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
+def test_health_endpoint_returns_ok(api_http) -> None:
+    import httpx
+
+    r = httpx.get(f"{api_http}/health")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok"}
 
 
 @live
 @pytest.mark.api
-def test_ingest_full_endpoint_triggers_background_ingest(api_client, vs) -> None:
-    """POST /ingest/full populates the test collection end-to-end.
+def test_ingest_full_endpoint_triggers_background_ingest(api_http) -> None:
+    """POST /ingest/full returns 202; data appears in Qdrant after polling."""
+    import time
 
-    TestClient runs background tasks synchronously, so all documents are
-    indexed by the time the response returns.
-    """
+    import httpx
+
     admin_secret = os.getenv("ADMIN_SECRET", "")
     assert admin_secret, "ADMIN_SECRET must be set in .env"
 
-    resp = api_client.post("/ingest/full", headers={"X-Admin-Secret": admin_secret})
-    assert resp.status_code == 202
-    assert resp.json() == {"status": "accepted"}
+    r = httpx.post(
+        f"{api_http}/ingest/full",
+        headers={"X-Admin-Secret": admin_secret},
+        timeout=10,
+    )
+    assert r.status_code == 202
+    assert r.json() == {"status": "accepted"}
 
-    # Background task ran synchronously — collection must have data
-    docs = vs.get_all_texts()
-    assert len(docs) > 0, "Expected at least one document after full ingest"
+    # Poll until the background ingest lands data in the production collection
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        if _g4_collection_count() > 0:
+            return
+        time.sleep(5)
+    pytest.fail(
+        f"No points in Qdrant collection '{_G4_COLLECTION}' after 120 s — "
+        "check that ERPNEXT_URL is routable from inside the Docker container"
+    )
 
 
 @live
 @pytest.mark.api
-async def test_webhook_endpoint_reindexes_document(api_client) -> None:
+def test_webhook_endpoint_reindexes_document(api_http) -> None:
     """POST /webhook/erpnext re-indexes a real PO from ERPNext."""
     import hashlib
     import hmac
     import json
 
-    from ingestion.erpnext_client import ERPNextClient
+    import httpx
 
-    async with ERPNextClient() as client:
-        pos = await client.get_list("Purchase Order", limit=1)
+    erpnext_url = os.getenv("ERPNEXT_URL", "")
+    api_key = os.getenv("ERPNEXT_API_KEY", "")
+    api_secret = os.getenv("ERPNEXT_API_SECRET", "")
+    if not all([erpnext_url, api_key, api_secret]):
+        pytest.skip("ERPNEXT_URL / ERPNEXT_API_KEY / ERPNEXT_API_SECRET not set in .env")
+
+    resp = httpx.get(
+        f"{erpnext_url}/api/resource/Purchase Order",
+        params={"limit_page_length": 1, "fields": '["name"]'},
+        headers={"Authorization": f"token {api_key}:{api_secret}"},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    pos = resp.json().get("data", [])
     assert pos, "Need at least one Purchase Order on the ERPNext site"
 
     docname = pos[0]["name"]
@@ -652,42 +683,36 @@ async def test_webhook_endpoint_reindexes_document(api_client) -> None:
     body = json.dumps({"doctype": "Purchase Order", "docname": docname}).encode()
     sig = hmac.new(webhook_secret.encode(), body, hashlib.sha256).hexdigest()
 
-    resp = api_client.post(
-        "/webhook/erpnext",
+    r = httpx.post(
+        f"{api_http}/webhook/erpnext",
         content=body,
         headers={
             "Content-Type": "application/json",
             "X-Frappe-Webhook-Signature": sig,
         },
+        timeout=60,
     )
-    assert resp.status_code == 200
-    data = resp.json()
+    assert r.status_code == 200
+    data = r.json()
     assert data["status"] == "indexed"
     assert data["docname"] == docname
 
 
 @live
 @pytest.mark.api
-async def test_query_endpoint_returns_answer_and_sources(
-    api_client, embedder, vs
-) -> None:
-    """POST /query returns a grounded answer with [docname] citations.
-
-    Seeds the test collection directly so the vector-search leg always has
-    at least one document, then queries via the API.
-    """
+def test_query_endpoint_returns_answer_and_sources(api_http) -> None:
+    """POST /query returns a grounded answer with [docname] citations."""
     import re
 
-    docname = await _first_po_name()
-    payload = await _ingest_po(docname, embedder, vs)
-    supplier = payload["supplier"]
+    import httpx
 
-    resp = api_client.post(
-        "/query",
-        json={"question": f"What purchase orders have been issued to {supplier}?"},
+    r = httpx.post(
+        f"{api_http}/query",
+        json={"question": "What purchase orders are active?"},
+        timeout=60,
     )
-    assert resp.status_code == 200
-    data = resp.json()
+    assert r.status_code == 200
+    data = r.json()
     assert data["answer"], "Expected a non-empty answer"
 
     citations = re.findall(r"\[([^\]]+)\]", data["answer"])
@@ -797,3 +822,288 @@ def test_evaluate_per_question_entries_have_required_fields(eval_results) -> Non
         assert "answer" in entry, f"Entry {i} missing 'answer'"
         assert "retrieved_context_count" in entry, f"Entry {i} missing 'retrieved_context_count'"
         assert entry["answer"], f"Entry {i} has an empty answer"
+
+
+# ---------------------------------------------------------------------------
+# Group 6 — Docker Compose full-stack
+# ---------------------------------------------------------------------------
+
+_DOCKER_APP_URL = "http://localhost:8000"
+_DOCKER_FRONTEND_URL = "http://localhost:8501"
+
+
+@pytest.fixture(scope="module")
+def docker_app():
+    """Skip the group if the containerised app is not reachable."""
+    import httpx
+
+    try:
+        httpx.get(f"{_DOCKER_APP_URL}/health", timeout=3).raise_for_status()
+    except Exception:
+        pytest.skip("Docker stack not running — start with: docker compose up -d")
+    return _DOCKER_APP_URL
+
+
+@live
+@pytest.mark.docker
+def test_docker_health_returns_ok(docker_app) -> None:
+    import httpx
+
+    r = httpx.get(f"{docker_app}/health")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok"}
+
+
+@live
+@pytest.mark.docker
+def test_docker_query_returns_answer_and_sources(docker_app) -> None:
+    import httpx
+
+    r = httpx.post(
+        f"{docker_app}/query",
+        json={"question": "What purchase orders are active?"},
+        timeout=60,
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert "answer" in data and isinstance(data["answer"], str) and data["answer"]
+    assert "sources" in data and isinstance(data["sources"], list)
+
+
+@live
+@pytest.mark.docker
+def test_docker_ingest_full_rejects_missing_secret(docker_app) -> None:
+    import httpx
+
+    r = httpx.post(f"{docker_app}/ingest/full")
+    assert r.status_code == 403
+
+
+@live
+@pytest.mark.docker
+def test_docker_ingest_full_accepts_valid_secret(docker_app) -> None:
+    import httpx
+
+    admin_secret = os.getenv("ADMIN_SECRET", "")
+    if not admin_secret:
+        pytest.skip("ADMIN_SECRET not set in .env")
+    r = httpx.post(f"{docker_app}/ingest/full", headers={"X-Admin-Secret": admin_secret})
+    # Background ingest is accepted; full completion depends on ERPNext being
+    # reachable from inside the container (ERPNEXT_URL must be a routable host,
+    # not 127.0.0.1, when running via docker compose).
+    assert r.status_code == 202
+    assert r.json() == {"status": "accepted"}
+
+
+@live
+@pytest.mark.docker
+def test_docker_frontend_returns_200() -> None:
+    import httpx
+
+    try:
+        r = httpx.get(_DOCKER_FRONTEND_URL, timeout=10)
+    except Exception:
+        pytest.skip(
+            "Frontend not running — start with: "
+            "docker compose -f docker-compose.yml -f docker-compose.frontend.yml up -d"
+        )
+    assert r.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Group 7 — Langfuse observability (pure HTTP — targets containerised stack)
+# ---------------------------------------------------------------------------
+# All tests POST to the running app container (localhost:8000) and verify
+# traces via the Langfuse REST API (localhost:3000).  No local SDK or
+# qdrant_client import is needed.
+
+_APP_HOST = os.getenv("API_URL", "http://localhost:8000")
+_LF_HOST = os.getenv("LANGFUSE_HOST", "http://localhost:3000")
+_LF_PUBLIC = os.getenv("LANGFUSE_PUBLIC_KEY", "")
+_LF_SECRET = os.getenv("LANGFUSE_SECRET_KEY", "")
+
+_EXPECTED_SPANS = {"rewrite", "filter_extraction", "hybrid_search", "rerank", "generate"}
+_LF_QUESTION = "What are the payment terms for our active contracts?"
+
+
+def _lf_headers() -> dict:
+    import base64
+
+    creds = base64.b64encode(f"{_LF_PUBLIC}:{_LF_SECRET}".encode()).decode()
+    return {"Authorization": f"Basic {creds}"}
+
+
+def _fetch_trace(trace_id: str) -> dict:
+    import time
+
+    import httpx
+
+    for _ in range(8):
+        try:
+            r = httpx.get(
+                f"{_LF_HOST}/api/public/traces/{trace_id}",
+                headers=_lf_headers(),
+                timeout=10,
+            )
+            if r.status_code == 200:
+                return r.json()
+        except Exception:
+            pass
+        time.sleep(1)
+    pytest.fail(f"Trace {trace_id} not found in Langfuse after retries")
+
+
+def _fetch_observations(trace_id: str) -> list[dict]:
+    import httpx
+
+    r = httpx.get(
+        f"{_LF_HOST}/api/public/observations",
+        params={"traceId": trace_id},
+        headers=_lf_headers(),
+        timeout=10,
+    )
+    r.raise_for_status()
+    return r.json().get("data", [])
+
+
+@pytest.fixture(scope="module")
+def lf_trace_result():
+    """POST a query to the containerised app and find the resulting trace in Langfuse.
+
+    Skips the whole module if either service is not reachable.
+    Returns (trace_id, question, api_result).
+    """
+    import time
+
+    import httpx
+
+    if not _LF_PUBLIC or not _LF_SECRET:
+        pytest.skip(
+            "LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY not set in .env"
+        )
+
+    for url, label in [
+        (f"{_APP_HOST}/health", "App (localhost:8000)"),
+        (f"{_LF_HOST}/api/public/health", "Langfuse (localhost:3000)"),
+    ]:
+        try:
+            httpx.get(url, timeout=3).raise_for_status()
+        except Exception:
+            pytest.skip(f"{label} not running — start with: docker compose up -d")
+
+    r = httpx.post(
+        f"{_APP_HOST}/query",
+        json={"question": _LF_QUESTION},
+        timeout=60,
+    )
+    r.raise_for_status()
+    result = r.json()
+
+    # Allow Langfuse time to ingest the event
+    time.sleep(4)
+
+    # Find the trace by matching the question in the input field
+    r2 = httpx.get(
+        f"{_LF_HOST}/api/public/traces",
+        params={"name": "query", "limit": 20},
+        headers=_lf_headers(),
+        timeout=10,
+    )
+    r2.raise_for_status()
+    traces = r2.json().get("data", [])
+    matching = [
+        t for t in traces
+        if t.get("input", {}).get("question") == _LF_QUESTION
+    ]
+    if not matching:
+        pytest.fail(f"No Langfuse trace found for: {_LF_QUESTION!r}")
+
+    return matching[0]["id"], _LF_QUESTION, result
+
+
+@live
+@pytest.mark.langfuse
+def test_langfuse_trace_created_for_query(lf_trace_result) -> None:
+    trace_id, question, _ = lf_trace_result
+    trace = _fetch_trace(trace_id)
+    assert trace["name"] == "query"
+    assert trace.get("input", {}).get("question") == question
+
+
+@live
+@pytest.mark.langfuse
+def test_langfuse_trace_has_all_five_spans(lf_trace_result) -> None:
+    trace_id, _, _ = lf_trace_result
+    obs = _fetch_observations(trace_id)
+    span_names = {o["name"] for o in obs}
+    missing = _EXPECTED_SPANS - span_names
+    assert not missing, f"Missing spans in trace: {missing}"
+
+
+@live
+@pytest.mark.langfuse
+def test_langfuse_trace_output_contains_answer_and_source_count(lf_trace_result) -> None:
+    trace_id, _, result = lf_trace_result
+    trace = _fetch_trace(trace_id)
+    output = trace.get("output") or {}
+    assert "answer" in output, "Trace output missing 'answer'"
+    assert "source_count" in output, "Trace output missing 'source_count'"
+    assert isinstance(output["source_count"], int) and output["source_count"] >= 0
+
+
+@live
+@pytest.mark.langfuse
+def test_langfuse_generate_span_output_matches_api_response(lf_trace_result) -> None:
+    """The 'generate' span's output should contain the same answer the API returned."""
+    trace_id, _, api_result = lf_trace_result
+    obs = _fetch_observations(trace_id)
+    gen_span = next((o for o in obs if o["name"] == "generate"), None)
+    assert gen_span is not None, "'generate' span not found in observations"
+    api_answer = api_result.get("answer", "")
+    assert api_answer, "API returned empty answer"
+    span_output = gen_span.get("output") or {}
+    span_answer = (
+        span_output.get("answer", span_output)
+        if isinstance(span_output, dict)
+        else str(span_output)
+    )
+    assert api_answer in str(span_answer) or str(span_answer) in api_answer, (
+        f"'generate' span output does not match API response.\n"
+        f"  API:  {api_answer[:120]!r}\n"
+        f"  Span: {str(span_answer)[:120]!r}"
+    )
+
+
+@live
+@pytest.mark.langfuse
+def test_langfuse_each_query_gets_distinct_trace(lf_trace_result) -> None:
+    """A second, different query must create a new distinct trace in Langfuse."""
+    import time
+
+    import httpx
+
+    second_question = "List our top suppliers by purchase volume."
+    r = httpx.post(
+        f"{_APP_HOST}/query",
+        json={"question": second_question},
+        timeout=60,
+    )
+    r.raise_for_status()
+    time.sleep(4)
+
+    r2 = httpx.get(
+        f"{_LF_HOST}/api/public/traces",
+        params={"name": "query", "limit": 20},
+        headers=_lf_headers(),
+        timeout=10,
+    )
+    r2.raise_for_status()
+    traces = r2.json().get("data", [])
+
+    first_id, _, _ = lf_trace_result
+    second_matches = [
+        t for t in traces
+        if t.get("input", {}).get("question") == second_question
+    ]
+    assert second_matches, f"No trace found for second query: {second_question!r}"
+    assert second_matches[0]["id"] != first_id, "Second query reused the same trace ID"
