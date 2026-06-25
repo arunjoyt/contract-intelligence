@@ -81,11 +81,16 @@ async def _lifespan(app: FastAPI):
 
     erpnext_client = ERPNextClient()
 
+    webhook_secret = os.environ.get("WEBHOOK_SECRET", "")
+    if not webhook_secret:
+        logger.warning("WEBHOOK_SECRET is not set — webhook endpoint will reject all requests")
+
     app.state.embedder = embedder
     app.state.vector_store = vector_store
     app.state.hybrid_search = hybrid_search
     app.state.pipeline = pipeline
     app.state.erpnext_client = erpnext_client
+    app.state.webhook_secret = webhook_secret
 
     logger.info("Startup complete — collection ready, BM25 built, reranker warm")
 
@@ -157,7 +162,7 @@ async def webhook_erpnext(request: Request) -> dict[str, str]:
         rebuild_bm25=lambda: app.state.hybrid_search.build_bm25_index(
             app.state.vector_store.get_all_texts()
         ),
-        webhook_secret=os.environ.get("WEBHOOK_SECRET") or "",
+        webhook_secret=app.state.webhook_secret,
     )
 
 

@@ -120,6 +120,8 @@ def create_webhook_router(
 
 
 def _verify_signature(body: bytes, signature: str, secret: str) -> None:
+    if not secret:
+        raise HTTPException(status_code=500, detail="Webhook secret not configured")
     expected = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expected, signature):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
