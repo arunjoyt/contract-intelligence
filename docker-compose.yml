@@ -59,6 +59,9 @@ services:
       LANGFUSE_HOST: http://langfuse:3000
       LANGFUSE_PUBLIC_KEY: lf-pk-local
       LANGFUSE_SECRET_KEY: lf-sk-local
+      # host.docker.internal resolves to the Mac host — allows the container to
+      # reach ERPNext running locally outside Docker (127.0.0.1 is loopback-only)
+      ERPNEXT_URL: http://host.docker.internal:8005
     ports:
       - "8000:8000"
 

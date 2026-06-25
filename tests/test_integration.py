@@ -15,8 +15,8 @@ Services needed for Groups 1-3:
     Qdrant   — http://localhost:6333
     OpenAI   — OPENAI_API_KEY in .env
 
-Group 4 tests the API layer (Step 12 — api/main.py).
-Services needed: Qdrant + ERPNext + OpenAI (same as Groups 1-3).
+Group 4 tests the API layer (Step 12 — api/main.py) via the containerised app.
+Services needed: Docker app (localhost:8000) + Qdrant (localhost:6333) + ERPNext + OpenAI.
 
 Group 5 tests the evaluation script (Step 14 — evaluation/evaluate.py).
 Services needed: Qdrant + OpenAI (ERPNext not required — test dataset is self-contained).
@@ -575,76 +575,105 @@ async def test_hyde_and_step_back_strategies_both_return_answers(embedder, vs) -
 
 # ===========================================================================
 # GROUP 4 — API layer (Step 12 — api/main.py)
-# TODO(#27): rewrite to use the Docker app via httpx (like Groups 6+7) instead
-# of FastAPI TestClient, which requires all project deps installed locally.
+# Services: Docker app (localhost:8000) + Qdrant (localhost:6333) + ERPNext + OpenAI
+# All tests use plain httpx against the running Docker stack — no TestClient.
 # ===========================================================================
 
+_G4_APP_URL = os.getenv("API_URL", "http://localhost:8000")
+_G4_QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+_G4_COLLECTION = os.getenv("QDRANT_COLLECTION", "procurement")
 
-@pytest.fixture(scope="session")
-def api_client(vs):
-    """Session-scoped TestClient wired to the live test Qdrant collection.
 
-    Depends on ``vs`` so the test collection is created before the app
-    lifespan runs and torn down after the client closes.
-    """
-    import os
+def _g4_collection_count() -> int:
+    """Return the point count for the production Qdrant collection, or 0 on error."""
+    import httpx
 
-    from fastapi.testclient import TestClient
-
-    from api.main import app
-
-    original = os.environ.get("QDRANT_COLLECTION")
-    os.environ["QDRANT_COLLECTION"] = TEST_COLLECTION
     try:
-        with TestClient(app) as client:
-            yield client
-    finally:
-        if original is None:
-            os.environ.pop("QDRANT_COLLECTION", None)
-        else:
-            os.environ["QDRANT_COLLECTION"] = original
+        r = httpx.get(f"{_G4_QDRANT_URL}/collections/{_G4_COLLECTION}", timeout=5)
+        if r.status_code == 200:
+            return r.json().get("result", {}).get("points_count", 0)
+    except Exception:
+        pass
+    return 0
+
+
+@pytest.fixture(scope="module")
+def api_http():
+    """Skip the group if the containerised app is not reachable."""
+    import httpx
+
+    try:
+        httpx.get(f"{_G4_APP_URL}/health", timeout=3).raise_for_status()
+    except Exception:
+        pytest.skip("App not running — start with: docker compose up -d")
+    return _G4_APP_URL
 
 
 @live
 @pytest.mark.api
-def test_health_endpoint_returns_ok(api_client) -> None:
-    resp = api_client.get("/health")
-    assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
+def test_health_endpoint_returns_ok(api_http) -> None:
+    import httpx
+
+    r = httpx.get(f"{api_http}/health")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok"}
 
 
 @live
 @pytest.mark.api
-def test_ingest_full_endpoint_triggers_background_ingest(api_client, vs) -> None:
-    """POST /ingest/full populates the test collection end-to-end.
+def test_ingest_full_endpoint_triggers_background_ingest(api_http) -> None:
+    """POST /ingest/full returns 202; data appears in Qdrant after polling."""
+    import time
 
-    TestClient runs background tasks synchronously, so all documents are
-    indexed by the time the response returns.
-    """
+    import httpx
+
     admin_secret = os.getenv("ADMIN_SECRET", "")
     assert admin_secret, "ADMIN_SECRET must be set in .env"
 
-    resp = api_client.post("/ingest/full", headers={"X-Admin-Secret": admin_secret})
-    assert resp.status_code == 202
-    assert resp.json() == {"status": "accepted"}
+    r = httpx.post(
+        f"{api_http}/ingest/full",
+        headers={"X-Admin-Secret": admin_secret},
+        timeout=10,
+    )
+    assert r.status_code == 202
+    assert r.json() == {"status": "accepted"}
 
-    # Background task ran synchronously — collection must have data
-    docs = vs.get_all_texts()
-    assert len(docs) > 0, "Expected at least one document after full ingest"
+    # Poll until the background ingest lands data in the production collection
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        if _g4_collection_count() > 0:
+            return
+        time.sleep(5)
+    pytest.fail(
+        f"No points in Qdrant collection '{_G4_COLLECTION}' after 120 s — "
+        "check that ERPNEXT_URL is routable from inside the Docker container"
+    )
 
 
 @live
 @pytest.mark.api
-async def test_webhook_endpoint_reindexes_document(api_client) -> None:
+def test_webhook_endpoint_reindexes_document(api_http) -> None:
     """POST /webhook/erpnext re-indexes a real PO from ERPNext."""
     import hashlib
     import hmac
     import json
 
-    from ingestion.erpnext_client import ERPNextClient
+    import httpx
 
-    async with ERPNextClient() as client:
-        pos = await client.get_list("Purchase Order", limit=1)
+    erpnext_url = os.getenv("ERPNEXT_URL", "")
+    api_key = os.getenv("ERPNEXT_API_KEY", "")
+    api_secret = os.getenv("ERPNEXT_API_SECRET", "")
+    if not all([erpnext_url, api_key, api_secret]):
+        pytest.skip("ERPNEXT_URL / ERPNEXT_API_KEY / ERPNEXT_API_SECRET not set in .env")
+
+    resp = httpx.get(
+        f"{erpnext_url}/api/resource/Purchase Order",
+        params={"limit_page_length": 1, "fields": '["name"]'},
+        headers={"Authorization": f"token {api_key}:{api_secret}"},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    pos = resp.json().get("data", [])
     assert pos, "Need at least one Purchase Order on the ERPNext site"
 
     docname = pos[0]["name"]
@@ -654,42 +683,36 @@ async def test_webhook_endpoint_reindexes_document(api_client) -> None:
     body = json.dumps({"doctype": "Purchase Order", "docname": docname}).encode()
     sig = hmac.new(webhook_secret.encode(), body, hashlib.sha256).hexdigest()
 
-    resp = api_client.post(
-        "/webhook/erpnext",
+    r = httpx.post(
+        f"{api_http}/webhook/erpnext",
         content=body,
         headers={
             "Content-Type": "application/json",
             "X-Frappe-Webhook-Signature": sig,
         },
+        timeout=60,
     )
-    assert resp.status_code == 200
-    data = resp.json()
+    assert r.status_code == 200
+    data = r.json()
     assert data["status"] == "indexed"
     assert data["docname"] == docname
 
 
 @live
 @pytest.mark.api
-async def test_query_endpoint_returns_answer_and_sources(
-    api_client, embedder, vs
-) -> None:
-    """POST /query returns a grounded answer with [docname] citations.
-
-    Seeds the test collection directly so the vector-search leg always has
-    at least one document, then queries via the API.
-    """
+def test_query_endpoint_returns_answer_and_sources(api_http) -> None:
+    """POST /query returns a grounded answer with [docname] citations."""
     import re
 
-    docname = await _first_po_name()
-    payload = await _ingest_po(docname, embedder, vs)
-    supplier = payload["supplier"]
+    import httpx
 
-    resp = api_client.post(
-        "/query",
-        json={"question": f"What purchase orders have been issued to {supplier}?"},
+    r = httpx.post(
+        f"{api_http}/query",
+        json={"question": "What purchase orders are active?"},
+        timeout=60,
     )
-    assert resp.status_code == 200
-    data = resp.json()
+    assert r.status_code == 200
+    data = r.json()
     assert data["answer"], "Expected a non-empty answer"
 
     citations = re.findall(r"\[([^\]]+)\]", data["answer"])
