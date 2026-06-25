@@ -22,8 +22,8 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://langfuse:langfuse@postgres:5432/langfuse
-      NEXTAUTH_SECRET: changeme-nextauth-secret
-      SALT: changeme-salt
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET}
+      SALT: ${LANGFUSE_SALT}
       NEXTAUTH_URL: http://localhost:3000
       TELEMETRY_ENABLED: "false"
       # Auto-seed a project so LANGFUSE_PUBLIC_KEY / SECRET_KEY work immediately
@@ -35,7 +35,7 @@ services:
       LANGFUSE_INIT_PROJECT_SECRET_KEY: lf-sk-local
       LANGFUSE_INIT_USER_EMAIL: admin@localhost.local
       LANGFUSE_INIT_USER_NAME: Admin
-      LANGFUSE_INIT_USER_PASSWORD: changeme
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_ADMIN_PASSWORD}
     ports:
       - "3000:3000"
 
