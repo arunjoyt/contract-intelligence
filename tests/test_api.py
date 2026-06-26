@@ -10,8 +10,10 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
+import jwt
 import pytest
 from fastapi.testclient import TestClient
 
@@ -20,6 +22,26 @@ from pipeline.query_pipeline import SourceDoc
 
 ADMIN_SECRET = "test-admin-secret"
 WEBHOOK_SECRET = "test-webhook-secret"
+JWT_SECRET = "test-jwt-secret-at-least-32-chars-long"
+ALLOWED_ROLES = "Purchase Manager,System Manager"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_jwt(roles: list[str] | None = None) -> str:
+    payload = {
+        "sub": "test-user",
+        "roles": roles if roles is not None else ["Purchase Manager"],
+        "exp": datetime.now(tz=UTC) + timedelta(hours=8),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+
+def _auth(roles: list[str] | None = None) -> dict[str, str]:
+    return {"Authorization": f"Bearer {_make_jwt(roles)}"}
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +83,13 @@ def client(monkeypatch, mock_pipeline):
     monkeypatch.setenv("ERPNEXT_URL", "http://localhost:8005")
     monkeypatch.setenv("ERPNEXT_API_KEY", "key")
     monkeypatch.setenv("ERPNEXT_API_SECRET", "secret")
+    monkeypatch.setenv("JWT_SECRET", JWT_SECRET)
+    monkeypatch.setenv("JWT_EXPIRY_HOURS", "8")
+    monkeypatch.setenv("ALLOWED_ROLES", ALLOWED_ROLES)
+    monkeypatch.setenv("ERPNEXT_OAUTH_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("ERPNEXT_OAUTH_CLIENT_SECRET", "test-client-secret")
+    monkeypatch.setenv("OAUTH_REDIRECT_URI", "http://localhost:8000/auth/callback")
+    monkeypatch.setenv("FRONTEND_URL", "http://localhost:8501")
 
     monkeypatch.setattr("api.main.Embedder", MagicMock)
     monkeypatch.setattr("api.main.VectorStore", lambda: mock_vs)
@@ -86,12 +115,40 @@ def test_health_returns_ok(client):
 
 
 # ---------------------------------------------------------------------------
-# /query
+# /query — auth
+# ---------------------------------------------------------------------------
+
+
+def test_query_without_token_returns_401(client):
+    resp = client.post("/query", json={"question": "What POs exist?"})
+    assert resp.status_code == 401
+
+
+def test_query_with_invalid_token_returns_401(client):
+    resp = client.post(
+        "/query",
+        json={"question": "What POs exist?"},
+        headers={"Authorization": "Bearer not-a-valid-jwt"},
+    )
+    assert resp.status_code == 401
+
+
+def test_query_with_disallowed_role_returns_403(client):
+    resp = client.post(
+        "/query",
+        json={"question": "What POs exist?"},
+        headers=_auth(roles=["Sales User"]),
+    )
+    assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# /query — pipeline
 # ---------------------------------------------------------------------------
 
 
 def test_query_returns_answer_and_sources(client, mock_pipeline):
-    resp = client.post("/query", json={"question": "What POs exist?"})
+    resp = client.post("/query", json={"question": "What POs exist?"}, headers=_auth())
     assert resp.status_code == 200
     data = resp.json()
     assert "answer" in data
@@ -103,7 +160,7 @@ def test_query_returns_answer_and_sources(client, mock_pipeline):
 
 
 def test_query_passes_question_to_pipeline(client, mock_pipeline):
-    client.post("/query", json={"question": "Show me contracts"})
+    client.post("/query", json={"question": "Show me contracts"}, headers=_auth())
     mock_pipeline.run.assert_called_once()
     args, kwargs = mock_pipeline.run.call_args
     assert args[0] == "Show me contracts"
@@ -113,21 +170,43 @@ def test_query_passes_filters_to_pipeline(client, mock_pipeline):
     client.post(
         "/query",
         json={"question": "POs from Acme", "filters": {"supplier": "Acme Corp"}},
+        headers=_auth(),
     )
     _, kwargs = mock_pipeline.run.call_args
     assert kwargs.get("filters") == {"supplier": "Acme Corp"}
 
 
 def test_query_with_null_filters(client, mock_pipeline):
-    resp = client.post("/query", json={"question": "anything", "filters": None})
+    resp = client.post("/query", json={"question": "anything", "filters": None}, headers=_auth())
     assert resp.status_code == 200
     _, kwargs = mock_pipeline.run.call_args
     assert kwargs.get("filters") is None
 
 
 def test_query_missing_question_returns_422(client):
-    resp = client.post("/query", json={})
+    resp = client.post("/query", json={}, headers=_auth())
     assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# /auth/login
+# ---------------------------------------------------------------------------
+
+
+def test_auth_login_redirects_to_erpnext(client):
+    resp = client.get("/auth/login", follow_redirects=False)
+    assert resp.status_code in (302, 307)
+    assert "frappe.integrations.oauth2.authorize" in resp.headers["location"]
+
+
+# ---------------------------------------------------------------------------
+# /auth/callback
+# ---------------------------------------------------------------------------
+
+
+def test_auth_callback_invalid_state_returns_400(client):
+    resp = client.get("/auth/callback?code=somecode&state=badstate")
+    assert resp.status_code == 400
 
 
 # ---------------------------------------------------------------------------

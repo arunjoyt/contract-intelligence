@@ -9,6 +9,7 @@ Skipped in CI automatically; run manually with:
     RUN_INTEGRATION=1 pytest tests/test_integration.py -m api -v
     RUN_INTEGRATION=1 pytest tests/test_integration.py -m evaluation -v
     RUN_INTEGRATION=1 pytest tests/test_integration.py -m langfuse -v
+    RUN_INTEGRATION=1 pytest tests/test_integration.py -m auth -v
 
 Services needed for Groups 1-3:
     ERPNext  — http://127.0.0.1:8005  (credentials in .env)
@@ -32,6 +33,7 @@ session start and deleted on teardown — the production collection is untouched
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from dotenv import load_dotenv
@@ -45,6 +47,31 @@ load_dotenv()
 _run = os.getenv("RUN_INTEGRATION")
 
 live = pytest.mark.skipif(not _run, reason="set RUN_INTEGRATION=1 to run")
+
+
+# ---------------------------------------------------------------------------
+# Auth helper — mint a short-lived JWT signed with the env JWT_SECRET.
+# Used by groups that hit /query on a running Docker stack.
+# ---------------------------------------------------------------------------
+
+
+def _integration_auth_headers() -> dict[str, str]:
+    """Return Authorization header using the JWT_SECRET from .env."""
+    import jwt
+
+    secret = os.environ.get("JWT_SECRET", "")
+    if not secret:
+        pytest.skip("JWT_SECRET not set in .env — needed to mint test JWTs")
+    token = jwt.encode(
+        {
+            "sub": "integration-test",
+            "roles": ["System Manager"],
+            "exp": datetime.now(tz=UTC) + timedelta(hours=1),
+        },
+        secret,
+        algorithm="HS256",
+    )
+    return {"Authorization": f"Bearer {token}"}
 
 # ---------------------------------------------------------------------------
 # Shared test collection — isolated from production data
@@ -709,6 +736,7 @@ def test_query_endpoint_returns_answer_and_sources(api_http) -> None:
     r = httpx.post(
         f"{api_http}/query",
         json={"question": "What purchase orders are active?"},
+        headers=_integration_auth_headers(),
         timeout=60,
     )
     assert r.status_code == 200
@@ -862,6 +890,7 @@ def test_docker_query_returns_answer_and_sources(docker_app) -> None:
     r = httpx.post(
         f"{docker_app}/query",
         json={"question": "What purchase orders are active?"},
+        headers=_integration_auth_headers(),
         timeout=60,
     )
     assert r.status_code == 200
@@ -994,6 +1023,7 @@ def lf_trace_result():
     r = httpx.post(
         f"{_APP_HOST}/query",
         json={"question": _LF_QUESTION},
+        headers=_integration_auth_headers(),
         timeout=60,
     )
     r.raise_for_status()
@@ -1086,6 +1116,7 @@ def test_langfuse_each_query_gets_distinct_trace(lf_trace_result) -> None:
     r = httpx.post(
         f"{_APP_HOST}/query",
         json={"question": second_question},
+        headers=_integration_auth_headers(),
         timeout=60,
     )
     r.raise_for_status()
@@ -1107,3 +1138,126 @@ def test_langfuse_each_query_gets_distinct_trace(lf_trace_result) -> None:
     ]
     assert second_matches, f"No trace found for second query: {second_question!r}"
     assert second_matches[0]["id"] != first_id, "Second query reused the same trace ID"
+
+
+# ===========================================================================
+# GROUP 8 — Auth (Option B: ERPNext OAuth2 + JWT)
+# Services: Docker app (localhost:8000)
+# Run: RUN_INTEGRATION=1 pytest tests/test_integration.py -m auth -v
+#
+# Note: the full OAuth browser flow (login → ERPNext → callback → JWT) requires
+# a configured ERPNext OAuth client and is covered by manual verification.
+# These tests cover the API-level auth surface that can be exercised without a
+# live browser session.
+# ===========================================================================
+
+
+@pytest.fixture(scope="module")
+def auth_app():
+    """Skip the group if the containerised app is not reachable."""
+    import httpx
+
+    try:
+        httpx.get(f"{_DOCKER_APP_URL}/health", timeout=3).raise_for_status()
+    except Exception:
+        pytest.skip("Docker stack not running — start with: docker compose up -d")
+    return _DOCKER_APP_URL
+
+
+@live
+@pytest.mark.auth
+def test_auth_query_without_token_returns_401(auth_app) -> None:
+    import httpx
+
+    r = httpx.post(
+        f"{auth_app}/query",
+        json={"question": "What POs exist?"},
+    )
+    assert r.status_code == 401
+
+
+@live
+@pytest.mark.auth
+def test_auth_query_with_invalid_token_returns_401(auth_app) -> None:
+    import httpx
+
+    r = httpx.post(
+        f"{auth_app}/query",
+        json={"question": "What POs exist?"},
+        headers={"Authorization": "Bearer not-a-valid-jwt"},
+    )
+    assert r.status_code == 401
+
+
+@live
+@pytest.mark.auth
+def test_auth_query_with_disallowed_role_returns_403(auth_app) -> None:
+    import jwt
+
+    secret = os.environ.get("JWT_SECRET", "")
+    if not secret:
+        pytest.skip("JWT_SECRET not set in .env")
+
+    import httpx
+
+    bad_token = jwt.encode(
+        {
+            "sub": "test-user",
+            "roles": ["Sales User"],
+            "exp": datetime.now(tz=UTC) + timedelta(hours=1),
+        },
+        secret,
+        algorithm="HS256",
+    )
+    r = httpx.post(
+        f"{auth_app}/query",
+        json={"question": "What POs exist?"},
+        headers={"Authorization": f"Bearer {bad_token}"},
+    )
+    assert r.status_code == 403
+
+
+@live
+@pytest.mark.auth
+def test_auth_login_redirects_to_erpnext_authorize(auth_app) -> None:
+    """GET /auth/login must redirect to the ERPNext OAuth2 authorize endpoint."""
+    import httpx
+
+    r = httpx.get(f"{auth_app}/auth/login", follow_redirects=False)
+    assert r.status_code in (302, 307)
+    location = r.headers.get("location", "")
+    assert "frappe.integrations.oauth2.authorize" in location
+    assert "client_id=" in location
+    assert "code_challenge=" in location
+
+
+@live
+@pytest.mark.auth
+def test_auth_callback_with_invalid_state_returns_400(auth_app) -> None:
+    """GET /auth/callback with an unknown state must return 400."""
+    import httpx
+
+    r = httpx.get(
+        f"{auth_app}/auth/callback",
+        params={"code": "somecode", "state": "nonexistent-state"},
+    )
+    assert r.status_code == 400
+
+
+@live
+@pytest.mark.auth
+def test_auth_query_with_valid_jwt_returns_200(auth_app) -> None:
+    """POST /query with a valid signed JWT must reach the pipeline (not be rejected by auth)."""
+    import httpx
+
+    r = httpx.post(
+        f"{auth_app}/query",
+        json={"question": "What purchase orders are active?"},
+        headers=_integration_auth_headers(),
+        timeout=60,
+    )
+    # 200 means auth passed; the pipeline may return any valid response
+    assert r.status_code == 200
+    data = r.json()
+    assert "answer" in data
+    assert "sources" in data

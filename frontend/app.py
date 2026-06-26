@@ -12,11 +12,24 @@ import httpx
 import streamlit as st
 from dotenv import load_dotenv
 
+from frontend.auth_ui import handle_token_from_url, show_login_page, show_logout_button
+
 load_dotenv()
 
 BACKEND_URL = os.environ["BACKEND_URL"]
 _MAX_HISTORY = 10
 _DOCTYPES = ["Purchase Order", "Purchase Invoice", "Contract", "Supplier Scorecard"]
+
+# Must run before any other st call so ?token= is captured on the redirect back.
+handle_token_from_url()
+
+st.set_page_config(page_title="Procurement Intelligence", layout="wide")
+
+if "jwt" not in st.session_state:
+    show_login_page()
+    st.stop()
+
+show_logout_button()
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +50,6 @@ def _render_sources(sources: list[dict]) -> None:
 # Page layout
 # ---------------------------------------------------------------------------
 
-st.set_page_config(page_title="Procurement Intelligence", layout="wide")
 st.title("Procurement Intelligence")
 
 # ---------------------------------------------------------------------------
@@ -100,6 +112,7 @@ if question := st.chat_input("Ask a procurement question..."):
                 resp = httpx.post(
                     f"{BACKEND_URL}/query",
                     json={"question": question, "filters": filters or None},
+                    headers={"Authorization": f"Bearer {st.session_state.jwt}"},
                     timeout=90.0,
                 )
                 resp.raise_for_status()
@@ -107,6 +120,9 @@ if question := st.chat_input("Ask a procurement question..."):
                 answer: str = data["answer"]
                 sources: list[dict] = data.get("sources", [])
             except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 401:
+                    del st.session_state.jwt
+                    st.rerun()
                 answer = f"API error {exc.response.status_code}: {exc.response.text}"
                 sources = []
             except Exception as exc:
