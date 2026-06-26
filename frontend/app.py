@@ -10,9 +10,8 @@ import os
 
 import httpx
 import streamlit as st
+from auth_ui import handle_token_from_url, show_login_page, show_logout_button
 from dotenv import load_dotenv
-
-from frontend.auth_ui import handle_token_from_url, show_login_page, show_logout_button
 
 load_dotenv()
 

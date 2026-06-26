@@ -24,7 +24,7 @@ def show_login_page() -> None:
     st.markdown(
         f'<a href="{login_url}" target="_self" style="text-decoration:none;">'
         '<button style="padding:0.5rem 1.5rem;font-size:1rem;cursor:pointer;'
-        'border:1px solid #ccc;border-radius:4px;background:#fff;">'
+        'border:1px solid #ccc;border-radius:4px;background:#fff;color:#000;">'
         "Login with ERPNext"
         "</button></a>",
         unsafe_allow_html=True,
