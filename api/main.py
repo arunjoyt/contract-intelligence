@@ -22,9 +22,11 @@ from dataclasses import asdict
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
 
+from api.auth.dependencies import require_allowed_role
+from api.routers.auth import router as auth_router
 from ingestion.chunker import chunk_text
 from ingestion.embedder import Embedder
 from ingestion.erpnext_client import ERPNextClient
@@ -91,6 +93,7 @@ async def _lifespan(app: FastAPI):
     app.state.pipeline = pipeline
     app.state.erpnext_client = erpnext_client
     app.state.webhook_secret = webhook_secret
+    app.state.oauth_state: dict[str, str] = {}
 
     logger.info("Startup complete — collection ready, BM25 built, reranker warm")
 
@@ -106,6 +109,7 @@ async def _lifespan(app: FastAPI):
 # ---------------------------------------------------------------------------
 
 app = FastAPI(title="Procurement RAG API", lifespan=_lifespan)
+app.include_router(auth_router)
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +133,7 @@ def health() -> dict[str, str]:
 
 
 @app.post("/query")
-def query(req: QueryRequest) -> dict[str, Any]:
+def query(req: QueryRequest, _user: dict = Depends(require_allowed_role)) -> dict[str, Any]:  # noqa: B008
     result = app.state.pipeline.run(req.question, filters=req.filters)
     return {
         "answer": result["answer"],
