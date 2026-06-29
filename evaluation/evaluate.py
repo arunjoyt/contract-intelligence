@@ -29,6 +29,9 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 _ROOT = Path(__file__).parent
+_PROJECT_ROOT = _ROOT.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 _DEFAULT_DATASET = _ROOT / "test_dataset.json"
 _DEFAULT_OUTPUT = _ROOT / "results.json"
 
