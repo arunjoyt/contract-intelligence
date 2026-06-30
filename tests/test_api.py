@@ -7,6 +7,7 @@ is created so no real network or model calls are made.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -236,7 +237,9 @@ def test_ingest_full_with_correct_secret_returns_202(client):
 
 
 def _sign(body: bytes, secret: str = WEBHOOK_SECRET) -> str:
-    return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return base64.b64encode(
+        hmac.new(secret.encode(), body, hashlib.sha256).digest()
+    ).decode()
 
 
 def test_webhook_invalid_signature_returns_401(client):
@@ -252,7 +255,7 @@ def test_webhook_invalid_signature_returns_401(client):
     assert resp.status_code == 401
 
 
-def test_webhook_unsupported_doctype_returns_ignored(client, monkeypatch):
+def test_webhook_unsupported_doctype_returns_ignored(client):
     body = json.dumps({"doctype": "Sales Order", "docname": "SO-001"}).encode()
     resp = client.post(
         "/webhook/erpnext",

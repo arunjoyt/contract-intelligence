@@ -357,3 +357,61 @@ def test_rebuild_bm25_called_after_upsert(
 
     method_names = [c[0] for c in manager.mock_calls]
     assert method_names.index("upsert") < method_names.index("rebuild")
+
+
+# ---------------------------------------------------------------------------
+# Frappe full-doc payload — primary key sent as "name", not "docname"
+# ---------------------------------------------------------------------------
+
+
+def test_purchase_order_indexed_via_name_field(
+    http_client: TestClient,
+    mock_erpnext: AsyncMock,
+    mock_vector_store: MagicMock,
+) -> None:
+    """Frappe's full-doc webhook format sends the PK as 'name', not 'docname'.
+
+    webhook_handler.py falls back to payload.get('name') when 'docname' is absent.
+    A missing or empty 'name' would cause a silent empty-string lookup and a skipped
+    or errored index — this test ensures the fallback path is exercised.
+    """
+    mock_erpnext.get_doc.side_effect = [PO_DOC, SUPPLIER_DOC]
+
+    body = json.dumps({"doctype": "Purchase Order", "name": "PO-001"}).encode()
+    response = http_client.post(
+        "/webhook/erpnext",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Frappe-Webhook-Signature": _sign(body),
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "indexed", "docname": "PO-001"}
+    mock_vector_store.upsert_chunks.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Delete-then-upsert failure — leaves document absent from index
+# ---------------------------------------------------------------------------
+
+
+def test_upsert_failure_after_delete_propagates_error(
+    http_client: TestClient,
+    mock_erpnext: AsyncMock,
+    mock_vector_store: MagicMock,
+) -> None:
+    """If upsert_chunks raises after delete_by_docname, the document is gone from the
+    index with no rollback.  The handler must surface the error (5xx) rather than
+    silently returning 'indexed' while leaving the index in a broken state.
+    """
+    mock_erpnext.get_doc.side_effect = [PO_DOC, SUPPLIER_DOC]
+    mock_vector_store.upsert_chunks.side_effect = RuntimeError("Qdrant connection refused")
+
+    response = _post(http_client, {"doctype": "Purchase Order", "docname": "PO-001"})
+
+    # delete ran — document is now absent from the index
+    mock_vector_store.delete_by_docname.assert_called_once_with("PO-001")
+    # error must propagate as 5xx, not be swallowed as a 200 "indexed"
+    assert response.status_code == 500
