@@ -179,3 +179,48 @@ The Langfuse UI is accessible at `http://localhost:3000` (default docker-compose
 ### Auth — implemented (Option B)
 
 `POST /query` requires a valid JWT (`Authorization: Bearer <token>`). The JWT is minted by FastAPI after completing the ERPNext OAuth2 Authorization Code + PKCE flow. Role enforcement (`Purchase Manager`, `Purchase User`, `Accounts User`, `System Manager`) happens at the point where the access token is exchanged — unauthorized users receive `403`. JWT lifetime is controlled by `JWT_EXPIRY_HOURS` (default 8h). See `docs/DEPLOYMENT.md` § Option B for setup details.
+
+## Testing Strategy
+
+Three layers. Each layer has a different scope and cost.
+
+### Layer 1 — Unit tests (`tests/test_*.py`, excluding `test_integration.py`)
+
+All external services are mocked:
+
+| Service | How it's mocked |
+|---|---|
+| ERPNext | `respx` intercepts at the httpx transport layer; `AsyncMock` for injected clients |
+| Qdrant | `QdrantClient` class replaced with `MagicMock` via `monkeypatch` |
+| OpenAI embeddings | `_client.embeddings.create` replaced with `MagicMock` |
+| OpenAI GPT-4o | `_client.chat.completions.create` replaced with `MagicMock` |
+| Langfuse | `MagicMock()` injected as `langfuse=` kwarg into `QueryPipeline` |
+| CrossEncoder model | `CrossEncoder` class replaced with `MagicMock` via `monkeypatch` |
+
+Run with `pytest tests/ -v`. No network. Required to pass in CI on every push.
+
+### Layer 2 — Backend integration tests (`tests/test_integration.py`)
+
+Nine groups that hit real services. Gated by `RUN_E2E=1` → `RUN_INTEGRATION=1`. Covers the full backend stack: ERPNext REST → ingestion → Qdrant → retrieval → pipeline → GPT-4o → Langfuse tracing. Streamlit is checked only with `httpx.get` → HTTP 200. Not in CI.
+
+ERPNext is driven via **REST API** (`frappe.client.submit`, `frappe.client.save`) — this does not exercise the Frappe background worker queue that fires webhooks in the real Desk path.
+
+### Layer 3 — E2E Desk UI tests (`tests/e2e/`, Playwright) — planned, not yet implemented
+
+Playwright drives the **ERPNext Desk UI in a real Chromium browser**, exercising the same code path a user takes. This layer exists to catch a class of bugs that REST-API integration tests cannot:
+
+**Three bugs found only via Desk UI:**
+1. Webhook records not configured in ERPNext.
+2. Webhooks configured but not firing (URL wrong, disabled, worker queue not running).
+3. `on_update_after_submit` event not triggering a webhook after a desk save on a submitted PO.
+
+Planned test files and what each catches:
+
+| File | Browser? | Catches |
+|---|---|---|
+| `test_webhook_config.py` | No (REST) | Missing / misconfigured webhook records |
+| `test_erpnext_desk_submit.py` | Yes | Webhook not firing on Desk submit |
+| `test_erpnext_desk_update_after_submit.py` | Yes | `on_update_after_submit` gap |
+| `test_erpnext_desk_cancel.py` | Yes | Cancel not propagating to Qdrant removal |
+
+Streamlit UI is tested separately via `streamlit.testing.v1.AppTest` (in-process, no browser). See `docs/IMPLEMENTATION_PLAN.md` Step 17 for the full implementation plan.

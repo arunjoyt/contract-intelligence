@@ -316,6 +316,53 @@ Calls `POST {BACKEND_URL}/query` via `httpx` with `Authorization: Bearer <jwt>` 
 
 ---
 
+## Step 17 — `tests/e2e/` — ERPNext Desk E2E Test Suite (Playwright)
+
+End-to-end tests that drive the **ERPNext Desk UI via a real Chromium browser** to catch webhook-triggering bugs that REST-API integration tests miss. Not part of CI (requires live infrastructure); gated by `RUN_E2E=1`.
+
+**Why this layer is needed — three bugs found only via Desk UI, not by `test_integration.py`:**
+1. Webhooks not configured in ERPNext at all.
+2. Webhooks configured but not firing (bad URL, disabled, background queue not running).
+3. `on_update_after_submit` not triggering a webhook after a desk save on a submitted PO.
+
+`test_integration.py` calls `frappe.client.submit` / `frappe.client.save` via REST, which bypasses the Frappe background worker queue that fires webhooks in production. Playwright drives the actual Desk UI through the same path a real user takes.
+
+**Dependency:** `pytest-playwright`. One-time setup: `playwright install chromium`.
+
+**New files:**
+```
+tests/e2e/
+├── conftest.py                               # Chromium fixture, ERPNext Desk login, Qdrant session scope
+├── test_webhook_config.py                    # REST assertions: records exist, enabled, correct events/URL/secret
+├── test_erpnext_desk_submit.py               # Desk submit PO/Contract → poll Qdrant → assert indexed
+├── test_erpnext_desk_update_after_submit.py  # Desk save on submitted PO → poll Qdrant → assert updated
+└── test_erpnext_desk_cancel.py               # Desk cancel → poll Qdrant → assert point removed
+```
+
+**Test coverage:**
+
+| File | Tests | What it catches |
+|---|---|---|
+| `test_webhook_config.py` | 5 (REST, no browser) | Missing / misconfigured webhook records |
+| `test_erpnext_desk_submit.py` | 2 | Webhook not firing on Desk submit |
+| `test_erpnext_desk_update_after_submit.py` | 2 | `on_update_after_submit` not firing on desk save |
+| `test_erpnext_desk_cancel.py` | 1 | Cancel not propagating to Qdrant removal |
+
+**Streamlit UI** is tested separately via `streamlit.testing.v1.AppTest` (in-process, no browser, no running server). Add `tests/test_streamlit.py` with 3 cases: basic query renders, sidebar filter wires correct param to API, graceful empty-response handling.
+
+**Run:**
+```bash
+playwright install chromium   # one-time
+
+RUN_E2E=1 pytest tests/e2e/ -v --headed   # watch in browser
+RUN_E2E=1 pytest tests/e2e/ -v            # headless
+pytest tests/test_streamlit.py -v         # no server or browser needed
+```
+
+**Not in CI** — requires live ERPNext, Qdrant, and FastAPI. Run manually before releases.
+
+---
+
 ## Environment Variables Reference
 
 | Variable | Required | Description |
