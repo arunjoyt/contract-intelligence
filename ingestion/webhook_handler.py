@@ -56,7 +56,8 @@ async def handle_webhook_request(
 
     payload = json.loads(body)
     doctype: str = payload.get("doctype", "")
-    docname: str = payload.get("docname", "")
+    # Frappe sends full-document payloads with "name"; webhook_data mapping sends "docname".
+    docname: str = payload.get("docname") or payload.get("name", "")
 
     if doctype not in SUPPORTED_DOCTYPES:
         return {"status": "ignored", "doctype": doctype}
@@ -122,7 +123,11 @@ def create_webhook_router(
 def _verify_signature(body: bytes, signature: str, secret: str) -> None:
     if not secret:
         raise HTTPException(status_code=500, detail="Webhook secret not configured")
-    expected = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    # Frappe sends HMAC-SHA256 as base64 (base64.b64encode(...digest())), not hex.
+    import base64
+    expected = base64.b64encode(
+        hmac.new(secret.encode("utf-8"), body, hashlib.sha256).digest()
+    ).decode()
     if not hmac.compare_digest(expected, signature):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
 

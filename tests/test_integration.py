@@ -10,6 +10,11 @@ Skipped in CI automatically; run manually with:
     RUN_INTEGRATION=1 pytest tests/test_integration.py -m evaluation -v
     RUN_INTEGRATION=1 pytest tests/test_integration.py -m langfuse -v
     RUN_INTEGRATION=1 pytest tests/test_integration.py -m auth -v
+    RUN_INTEGRATION=1 pytest tests/test_integration.py -m webhook -v
+
+Group 9 tests the ERPNext → webhook → Qdrant indexing flow end-to-end using a
+FastAPI TestClient wired with real dependencies (no Docker stack required).
+Services needed: ERPNext + Qdrant + OpenAI.
 
 Services needed for Groups 1-3:
     ERPNext  — http://127.0.0.1:8005  (credentials in .env)
@@ -624,6 +629,27 @@ def _g4_collection_count() -> int:
     return 0
 
 
+def _g4_qdrant_points_for_docname(docname: str) -> list[dict]:
+    """Return Qdrant points in the production collection matching docname."""
+    import httpx
+
+    try:
+        r = httpx.post(
+            f"{_G4_QDRANT_URL}/collections/{_G4_COLLECTION}/points/scroll",
+            json={
+                "filter": {"must": [{"key": "docname", "match": {"value": docname}}]},
+                "limit": 50,
+                "with_payload": True,
+            },
+            timeout=5,
+        )
+        if r.status_code == 200:
+            return r.json()["result"]["points"]
+    except Exception:
+        pass
+    return []
+
+
 @pytest.fixture(scope="module")
 def api_http():
     """Skip the group if the containerised app is not reachable."""
@@ -680,7 +706,11 @@ def test_ingest_full_endpoint_triggers_background_ingest(api_http) -> None:
 @live
 @pytest.mark.api
 def test_webhook_endpoint_reindexes_document(api_http) -> None:
-    """POST /webhook/erpnext re-indexes a real PO from ERPNext."""
+    """POST /webhook/erpnext re-indexes a real PO from ERPNext.
+
+    Signs using base64-encoded HMAC to match Frappe's X-Frappe-Webhook-Signature format.
+    """
+    import base64
     import hashlib
     import hmac
     import json
@@ -695,20 +725,23 @@ def test_webhook_endpoint_reindexes_document(api_http) -> None:
 
     resp = httpx.get(
         f"{erpnext_url}/api/resource/Purchase Order",
-        params={"limit_page_length": 1, "fields": '["name"]'},
+        params={"limit_page_length": 1, "fields": '["name"]', "filters": '[["docstatus","=","1"]]'},
         headers={"Authorization": f"token {api_key}:{api_secret}"},
         timeout=10,
     )
     resp.raise_for_status()
     pos = resp.json().get("data", [])
-    assert pos, "Need at least one Purchase Order on the ERPNext site"
+    if not pos:
+        pytest.skip("No submitted Purchase Orders on the ERPNext site")
 
     docname = pos[0]["name"]
     webhook_secret = os.getenv("WEBHOOK_SECRET", "")
     assert webhook_secret, "WEBHOOK_SECRET must be set in .env"
 
     body = json.dumps({"doctype": "Purchase Order", "docname": docname}).encode()
-    sig = hmac.new(webhook_secret.encode(), body, hashlib.sha256).hexdigest()
+    sig = base64.b64encode(
+        hmac.new(webhook_secret.encode(), body, hashlib.sha256).digest()
+    ).decode()
 
     r = httpx.post(
         f"{api_http}/webhook/erpnext",
@@ -723,6 +756,335 @@ def test_webhook_endpoint_reindexes_document(api_http) -> None:
     data = r.json()
     assert data["status"] == "indexed"
     assert data["docname"] == docname
+
+    points = _g4_qdrant_points_for_docname(docname)
+    assert points, f"{docname} not found in Qdrant after webhook POST"
+    assert points[0]["payload"]["source_doctype"] == "Purchase Order"
+
+
+def _erp_credentials() -> tuple[str, str, str]:
+    """Return (erpnext_url, api_key, api_secret) or pytest.skip if not set."""
+    url = os.getenv("ERPNEXT_URL", "")
+    key = os.getenv("ERPNEXT_API_KEY", "")
+    secret = os.getenv("ERPNEXT_API_SECRET", "")
+    if not all([url, key, secret]):
+        pytest.skip("ERPNext credentials not set in .env")
+    return url, key, secret
+
+
+def _erp_create_and_submit_po(erpnext_url: str, erp_headers: dict) -> tuple[str, str]:
+    """Create a minimal draft PO and submit it. Returns (docname, supplier).
+
+    Uses the first available supplier, company, and purchase item on the site.
+    Passes the full created doc to frappe.client.submit so the timestamp check passes.
+    """
+    import json
+
+    import httpx
+
+    supplier = httpx.get(
+        f"{erpnext_url}/api/resource/Supplier",
+        params={"limit_page_length": 1, "fields": '["name"]'},
+        headers=erp_headers, timeout=10,
+    ).json().get("data", [{}])[0].get("name")
+    company = httpx.get(
+        f"{erpnext_url}/api/resource/Company",
+        params={"limit_page_length": 1, "fields": '["name"]'},
+        headers=erp_headers, timeout=10,
+    ).json().get("data", [{}])[0].get("name")
+    item_code = httpx.get(
+        f"{erpnext_url}/api/resource/Item",
+        params={"limit_page_length": 1, "fields": '["name"]', "filters": '[["is_purchase_item","=","1"]]'},
+        headers=erp_headers, timeout=10,
+    ).json().get("data", [{}])[0].get("name")
+
+    if not all([supplier, company, item_code]):
+        pytest.skip("Could not find supplier / company / item on ERPNext site")
+
+    schedule_date = datetime.now(tz=UTC).strftime("%Y-%m-%d")
+    create_r = httpx.post(
+        f"{erpnext_url}/api/resource/Purchase Order",
+        json={
+            "doctype": "Purchase Order",
+            "supplier": supplier,
+            "company": company,
+            "schedule_date": schedule_date,
+            "items": [{"item_code": item_code, "qty": 1, "schedule_date": schedule_date}],
+        },
+        headers=erp_headers, timeout=15,
+    )
+    create_r.raise_for_status()
+    created_doc = create_r.json()["data"]
+    docname = created_doc["name"]
+
+    httpx.post(
+        f"{erpnext_url}/api/method/frappe.client.submit",
+        data={"doc": json.dumps(created_doc)},
+        headers=erp_headers, timeout=15,
+    ).raise_for_status()
+
+    return docname, supplier
+
+
+def _erp_cancel_po(erpnext_url: str, erp_headers: dict, docname: str) -> None:
+    """Cancel a submitted PO; silently ignore errors (safe to call in finally)."""
+    import httpx
+    try:
+        httpx.post(
+            f"{erpnext_url}/api/method/frappe.client.cancel",
+            data={"doctype": "Purchase Order", "name": docname},
+            headers=erp_headers, timeout=10,
+        )
+    except Exception:
+        pass
+
+
+def _poll_qdrant(docname: str, *, predicate, timeout: int = 60) -> list[dict]:
+    """Poll production Qdrant until predicate(points) is True or timeout expires."""
+    import time
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        points = _g4_qdrant_points_for_docname(docname)
+        if predicate(points):
+            return points
+        time.sleep(3)
+    return _g4_qdrant_points_for_docname(docname)
+
+
+@live
+@pytest.mark.api
+def test_erpnext_po_submit_fires_webhook_and_lands_in_qdrant(api_http) -> None:
+    """True E2E: submit a PO in ERPNext → ERPNext background worker fires webhook →
+    doc appears in production Qdrant — without us manually posting to the endpoint.
+
+    This is the test that catches Frappe-side issues: wrong signature encoding,
+    enable_security off, empty webhook body, wrong field names, etc.
+
+    Requires:
+      - Frappe background workers running (bench start / bench worker)
+      - po-on-submit webhook enabled with enable_security=1 in ERPNext
+      - FastAPI reachable at API_URL (default http://localhost:8000)
+    """
+    import json
+    import time
+
+    import httpx
+
+    erpnext_url = os.getenv("ERPNEXT_URL", "")
+    api_key = os.getenv("ERPNEXT_API_KEY", "")
+    api_secret = os.getenv("ERPNEXT_API_SECRET", "")
+    if not all([erpnext_url, api_key, api_secret]):
+        pytest.skip("ERPNext credentials not set in .env")
+
+    erp_headers = {"Authorization": f"token {api_key}:{api_secret}"}
+
+    # Gather the first available supplier, company, and buy item from ERPNext
+    supplier = httpx.get(
+        f"{erpnext_url}/api/resource/Supplier",
+        params={"limit_page_length": 1, "fields": '["name"]'},
+        headers=erp_headers, timeout=10,
+    ).json().get("data", [{}])[0].get("name")
+    company = httpx.get(
+        f"{erpnext_url}/api/resource/Company",
+        params={"limit_page_length": 1, "fields": '["name"]'},
+        headers=erp_headers, timeout=10,
+    ).json().get("data", [{}])[0].get("name")
+    item_code = httpx.get(
+        f"{erpnext_url}/api/resource/Item",
+        params={"limit_page_length": 1, "fields": '["name"]', "filters": '[["is_purchase_item","=","1"]]'},
+        headers=erp_headers, timeout=10,
+    ).json().get("data", [{}])[0].get("name")
+
+    if not all([supplier, company, item_code]):
+        pytest.skip("Could not find supplier / company / item on ERPNext site")
+
+    schedule_date = datetime.now(tz=UTC).strftime("%Y-%m-%d")
+    po_body = {
+        "doctype": "Purchase Order",
+        "supplier": supplier,
+        "company": company,
+        "schedule_date": schedule_date,
+        "items": [{"item_code": item_code, "qty": 1, "schedule_date": schedule_date}],
+    }
+
+    # 1. Create draft PO; keep the full doc dict (contains modified timestamp for submit)
+    create_r = httpx.post(
+        f"{erpnext_url}/api/resource/Purchase Order",
+        json=po_body, headers=erp_headers, timeout=15,
+    )
+    create_r.raise_for_status()
+    created_doc = create_r.json()["data"]
+    docname = created_doc["name"]
+
+    try:
+        # Clear any stale Qdrant point for this docname before submitting
+        httpx.post(
+            f"{_G4_QDRANT_URL}/collections/{_G4_COLLECTION}/points/delete",
+            json={"filter": {"must": [{"key": "docname", "match": {"value": docname}}]}},
+            timeout=5,
+        )
+
+        # 2. Submit — pass the full created doc so Frappe's timestamp check passes
+        submit_r = httpx.post(
+            f"{erpnext_url}/api/method/frappe.client.submit",
+            data={"doc": json.dumps(created_doc)},
+            headers=erp_headers, timeout=15,
+        )
+        submit_r.raise_for_status()
+
+        # 3. Poll Qdrant for up to 60 s — the background worker delivers async
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            if _g4_qdrant_points_for_docname(docname):
+                break
+            time.sleep(3)
+
+        points = _g4_qdrant_points_for_docname(docname)
+        assert points, (
+            f"{docname} did not appear in Qdrant within 60 s after ERPNext submission.\n"
+            "Check: (1) Frappe background workers running? (bench start / bench worker)\n"
+            "       (2) 'po-on-submit' webhook has enable_security=1 in ERPNext desk\n"
+            "       (3) FastAPI is running and reachable at 127.0.0.1:8000"
+        )
+
+        payload = points[0]["payload"]
+        assert payload["source_doctype"] == "Purchase Order"
+        assert payload["docname"] == docname
+        assert payload["supplier"] == supplier
+
+    finally:
+        # Cancel the test PO so it doesn't pollute active data; ignore errors
+        try:
+            httpx.post(
+                f"{erpnext_url}/api/method/frappe.client.cancel",
+                json={"doctype": "Purchase Order", "name": docname},
+                headers=erp_headers, timeout=10,
+            )
+        except Exception:
+            pass
+
+
+@live
+@pytest.mark.api
+def test_erpnext_po_cancel_fires_webhook_and_updates_qdrant(api_http) -> None:
+    """True E2E: submit a PO → cancel it in ERPNext → Qdrant point shows 'Cancelled'.
+
+    Requires the po-on-cancel webhook configured with enable_security=1.
+    ERPNext fires on_cancel asynchronously via background workers; the test
+    polls Qdrant for up to 60 s before failing.
+
+    RUN_INTEGRATION=1 pytest tests/test_integration.py::test_erpnext_po_cancel_fires_webhook_and_updates_qdrant -v
+    """
+    import httpx
+
+    erpnext_url, key, secret = _erp_credentials()
+    erp_headers = {"Authorization": f"token {key}:{secret}"}
+
+    docname = ""
+    try:
+        docname, supplier = _erp_create_and_submit_po(erpnext_url, erp_headers)
+
+        # Wait for on_submit to land so we have a baseline point in Qdrant
+        points = _poll_qdrant(docname, predicate=lambda pts: len(pts) > 0, timeout=60)
+        assert points, (
+            f"{docname} did not appear in Qdrant after submission — cannot test cancel flow.\n"
+            "Check: Frappe workers running? po-on-submit webhook configured with enable_security=1?"
+        )
+
+        # Cancel — frappe.client.cancel takes doctype + name (no full-doc timestamp needed)
+        httpx.post(
+            f"{erpnext_url}/api/method/frappe.client.cancel",
+            data={"doctype": "Purchase Order", "name": docname},
+            headers=erp_headers, timeout=15,
+        ).raise_for_status()
+
+        # Poll until status flips to "Cancelled" (on_cancel webhook re-indexes the doc)
+        points = _poll_qdrant(
+            docname,
+            predicate=lambda pts: any(p["payload"].get("status") == "Cancelled" for p in pts),
+            timeout=60,
+        )
+
+        assert points, (
+            f"{docname} disappeared from Qdrant after cancel — expected re-index with status='Cancelled'.\n"
+            "Check: po-on-cancel webhook configured? enable_security=1?"
+        )
+        statuses = [p["payload"].get("status") for p in points]
+        assert all(s == "Cancelled" for s in statuses), (
+            f"Expected all points for {docname} to have status='Cancelled', got: {statuses}"
+        )
+
+    finally:
+        # PO is already cancelled in the test body; nothing to clean up
+        pass
+
+
+@live
+@pytest.mark.api
+def test_erpnext_po_update_fires_webhook_and_reindexes_qdrant(api_http) -> None:
+    """True E2E: submit a PO → trigger on_update_after_submit → point reappears in Qdrant.
+
+    Deletes the Qdrant point after the initial index so that reappearance after
+    the save is unambiguous — even if no payload fields change, re-indexing is
+    confirmed by the point being absent then present.
+
+    Requires the po-on-update-submitted webhook configured with enable_security=1.
+
+    RUN_INTEGRATION=1 pytest tests/test_integration.py::test_erpnext_po_update_fires_webhook_and_reindexes_qdrant -v
+    """
+    import json
+
+    import httpx
+
+    erpnext_url, key, secret = _erp_credentials()
+    erp_headers = {"Authorization": f"token {key}:{secret}"}
+
+    docname = ""
+    try:
+        docname, supplier = _erp_create_and_submit_po(erpnext_url, erp_headers)
+
+        # Wait for initial on_submit webhook to land
+        points = _poll_qdrant(docname, predicate=lambda pts: len(pts) > 0, timeout=60)
+        assert points, (
+            f"{docname} did not appear in Qdrant after submission — cannot test update flow.\n"
+            "Check: Frappe workers running? po-on-submit webhook configured?"
+        )
+
+        # Delete the point so reappearance after update is unambiguous
+        httpx.post(
+            f"{_G4_QDRANT_URL}/collections/{_G4_COLLECTION}/points/delete",
+            json={"filter": {"must": [{"key": "docname", "match": {"value": docname}}]}},
+            timeout=5,
+        )
+        assert not _g4_qdrant_points_for_docname(docname), "Qdrant point not cleared before update"
+
+        # Fetch the current doc to get a fresh modified timestamp (avoids TimestampMismatchError)
+        current_doc = httpx.get(
+            f"{erpnext_url}/api/resource/Purchase Order/{docname}",
+            headers=erp_headers, timeout=10,
+        ).json()["data"]
+
+        # frappe.client.save on a submitted doc triggers on_update_after_submit
+        httpx.post(
+            f"{erpnext_url}/api/method/frappe.client.save",
+            data={"doc": json.dumps(current_doc)},
+            headers=erp_headers, timeout=15,
+        ).raise_for_status()
+
+        # Poll for the point to reappear (on_update_after_submit webhook fires async)
+        points = _poll_qdrant(docname, predicate=lambda pts: len(pts) > 0, timeout=60)
+
+        assert points, (
+            f"{docname} did not reappear in Qdrant within 60 s after update.\n"
+            "Check: po-on-update-submitted webhook has enable_security=1?\n"
+            "       Frappe background workers running?"
+        )
+        payload = points[0]["payload"]
+        assert payload["source_doctype"] == "Purchase Order"
+        assert payload["supplier"] == supplier
+
+    finally:
+        _erp_cancel_po(erpnext_url, erp_headers, docname)
 
 
 @live
@@ -1261,3 +1623,222 @@ def test_auth_query_with_valid_jwt_returns_200(auth_app) -> None:
     data = r.json()
     assert "answer" in data
     assert "sources" in data
+
+
+# ===========================================================================
+# GROUP 9 — Webhook → Qdrant flow (ERPNext → webhook handler → Qdrant)
+# Services: ERPNext + Qdrant + OpenAI
+# Run: RUN_INTEGRATION=1 pytest tests/test_integration.py -m webhook -v
+#
+# Tests the real incremental indexing path end-to-end using a FastAPI TestClient
+# wired with live dependencies (no Docker stack required).  Data lands in the
+# isolated test collection so production is never touched.
+# ===========================================================================
+
+_G9_QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+_G9_WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
+
+
+def _g9_sign(body: bytes) -> str:
+    import hashlib
+    import hmac
+
+    assert _G9_WEBHOOK_SECRET, "WEBHOOK_SECRET must be set in .env"
+    return hmac.new(_G9_WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
+
+
+def _g9_post_webhook(client, doctype: str, docname: str):
+    import json
+
+    body = json.dumps({"doctype": doctype, "docname": docname}).encode()
+    return client.post(
+        "/webhook/erpnext",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Frappe-Webhook-Signature": _g9_sign(body),
+        },
+    )
+
+
+def _g9_qdrant_points_for_docname(docname: str, collection: str) -> list[dict]:
+    import httpx
+
+    r = httpx.post(
+        f"{_G9_QDRANT_URL}/collections/{collection}/points/scroll",
+        json={"filter": {"must": [{"key": "docname", "match": {"value": docname}}]}, "limit": 50, "with_payload": True},
+        timeout=5,
+    )
+    r.raise_for_status()
+    return r.json()["result"]["points"]
+
+
+def _g9_first_erpnext_doc(doctype: str) -> str | None:
+    """Return the name of the first submitted document of the given doctype, or None."""
+    import httpx
+
+    erpnext_url = os.getenv("ERPNEXT_URL", "")
+    api_key = os.getenv("ERPNEXT_API_KEY", "")
+    api_secret = os.getenv("ERPNEXT_API_SECRET", "")
+    if not all([erpnext_url, api_key, api_secret]):
+        return None
+    filters = '[["docstatus","=","1"]]' if doctype != "Supplier Scorecard" else "[]"
+    r = httpx.get(
+        f"{erpnext_url}/api/resource/{doctype.replace(' ', '%20')}",
+        params={"limit_page_length": 1, "fields": '["name"]', "filters": filters},
+        headers={"Authorization": f"token {api_key}:{api_secret}"},
+        timeout=10,
+    )
+    r.raise_for_status()
+    docs = r.json().get("data", [])
+    return docs[0]["name"] if docs else None
+
+
+@pytest.fixture(scope="module")
+def webhook_http_client(embedder, vs):
+    """TestClient wired with real ERPNextClient, Embedder, and VectorStore (test collection).
+
+    No Docker stack needed — the ASGI app runs in-process.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from ingestion.erpnext_client import ERPNextClient
+    from ingestion.webhook_handler import create_webhook_router
+    from retrieval.hybrid_search import HybridSearch
+
+    if not _G9_WEBHOOK_SECRET:
+        pytest.skip("WEBHOOK_SECRET not set in .env")
+
+    erpnext_client = ERPNextClient()
+    hybrid_search = HybridSearch(embedder=embedder, vector_store=vs)
+
+    router = create_webhook_router(
+        erpnext_client=erpnext_client,
+        embedder=embedder,
+        vector_store=vs,
+        rebuild_bm25=lambda: hybrid_search.build_bm25_index(vs.get_all_texts()),
+        webhook_secret=_G9_WEBHOOK_SECRET,
+    )
+    app = FastAPI()
+    app.include_router(router, prefix="/webhook")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        yield client
+
+    import asyncio
+    asyncio.run(erpnext_client.aclose())
+
+
+@live
+@pytest.mark.webhook
+def test_webhook_po_lands_in_qdrant(webhook_http_client, vs) -> None:
+    """Signed PO webhook → handler fetches doc from ERPNext → point appears in test Qdrant."""
+    docname = _g9_first_erpnext_doc("Purchase Order")
+    if not docname:
+        pytest.skip("No submitted Purchase Orders on ERPNext site")
+
+    # Clear any pre-existing vectors for this docname in the test collection
+    vs.delete_by_docname(docname)
+
+    r = _g9_post_webhook(webhook_http_client, "Purchase Order", docname)
+    assert r.status_code == 200, f"Webhook returned {r.status_code}: {r.text}"
+    assert r.json() == {"status": "indexed", "docname": docname}
+
+    points = _g9_qdrant_points_for_docname(docname, vs._collection)
+    assert len(points) > 0, f"{docname} not found in Qdrant after webhook"
+
+
+@live
+@pytest.mark.webhook
+def test_webhook_po_metadata_matches_erpnext(webhook_http_client, vs) -> None:
+    """Qdrant payload for the indexed PO has correct source_doctype, docname, and supplier."""
+    import httpx
+
+    docname = _g9_first_erpnext_doc("Purchase Order")
+    if not docname:
+        pytest.skip("No submitted Purchase Orders on ERPNext site")
+
+    # Fetch ground-truth from ERPNext
+    erpnext_url = os.getenv("ERPNEXT_URL", "")
+    api_key = os.getenv("ERPNEXT_API_KEY", "")
+    api_secret = os.getenv("ERPNEXT_API_SECRET", "")
+    po = httpx.get(
+        f"{erpnext_url}/api/resource/Purchase%20Order/{docname}",
+        headers={"Authorization": f"token {api_key}:{api_secret}"},
+        timeout=10,
+    ).json()["data"]
+
+    _g9_post_webhook(webhook_http_client, "Purchase Order", docname)
+
+    points = _g9_qdrant_points_for_docname(docname, vs._collection)
+    assert points, f"{docname} not in Qdrant"
+
+    payload = points[0]["payload"]
+    assert payload["source_doctype"] == "Purchase Order"
+    assert payload["docname"] == docname
+    assert payload["supplier"] == po.get("supplier"), (
+        f"supplier mismatch: Qdrant={payload['supplier']!r}, ERPNext={po.get('supplier')!r}"
+    )
+    assert payload["status"] == po.get("status"), (
+        f"status mismatch: Qdrant={payload['status']!r}, ERPNext={po.get('status')!r}"
+    )
+
+
+@live
+@pytest.mark.webhook
+def test_webhook_po_is_searchable_by_vector(webhook_http_client, vs, embedder) -> None:
+    """PO indexed via webhook is retrievable through vector search."""
+    docname = _g9_first_erpnext_doc("Purchase Order")
+    if not docname:
+        pytest.skip("No submitted Purchase Orders on ERPNext site")
+
+    _g9_post_webhook(webhook_http_client, "Purchase Order", docname)
+
+    query_vector = embedder.embed_query("purchase order supplier payment terms")
+    results = vs.search(query_vector, top_k=20)
+    retrieved = [r.payload["docname"] for r in results if r.payload]
+    assert docname in retrieved, (
+        f"{docname} not found in vector search results after webhook indexing"
+    )
+
+
+@live
+@pytest.mark.webhook
+def test_webhook_po_reindex_is_idempotent(webhook_http_client, vs) -> None:
+    """Re-sending the same webhook does not create duplicate Qdrant points."""
+    docname = _g9_first_erpnext_doc("Purchase Order")
+    if not docname:
+        pytest.skip("No submitted Purchase Orders on ERPNext site")
+
+    _g9_post_webhook(webhook_http_client, "Purchase Order", docname)
+    count_first = len(_g9_qdrant_points_for_docname(docname, vs._collection))
+
+    _g9_post_webhook(webhook_http_client, "Purchase Order", docname)
+    count_second = len(_g9_qdrant_points_for_docname(docname, vs._collection))
+
+    assert count_first == count_second, (
+        f"Duplicate points after re-index: {count_first} → {count_second}"
+    )
+
+
+@live
+@pytest.mark.webhook
+def test_webhook_contract_lands_in_qdrant(webhook_http_client, vs) -> None:
+    """Signed Contract webhook → doc is fetched from ERPNext and indexed in Qdrant."""
+    docname = _g9_first_erpnext_doc("Contract")
+    if not docname:
+        pytest.skip("No submitted Contracts on ERPNext site")
+
+    vs.delete_by_docname(docname)
+
+    r = _g9_post_webhook(webhook_http_client, "Contract", docname)
+    assert r.status_code == 200, f"Webhook returned {r.status_code}: {r.text}"
+    assert r.json()["status"] in ("indexed", "skipped"), (
+        f"Unexpected status: {r.json()}"
+    )
+
+    if r.json()["status"] == "indexed":
+        points = _g9_qdrant_points_for_docname(docname, vs._collection)
+        assert len(points) > 0, f"{docname} not found in Qdrant after webhook"
+        assert points[0]["payload"]["source_doctype"] == "Contract"

@@ -36,4 +36,5 @@ markers = [
     "docker: marks Docker Compose full-stack integration tests (requires docker compose up)",
     "langfuse: marks Langfuse observability integration tests (requires live Langfuse server)",
     "auth: marks auth integration tests (requires docker compose up; JWT_SECRET in .env)",
+    "webhook: marks webhook→Qdrant flow integration tests (ERPNext + Qdrant + OpenAI; no Docker stack needed)",
 ]

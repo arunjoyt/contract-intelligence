@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -22,7 +23,9 @@ WEBHOOK_SECRET = "test-webhook-secret"
 
 
 def _sign(body: bytes, secret: str = WEBHOOK_SECRET) -> str:
-    return hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    return base64.b64encode(
+        hmac.new(secret.encode("utf-8"), body, hashlib.sha256).digest()
+    ).decode()
 
 
 def _post(client: TestClient, payload: dict, *, secret: str = WEBHOOK_SECRET) -> object:

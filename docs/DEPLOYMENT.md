@@ -259,6 +259,85 @@ https://api.procurement-rag.example.com/webhook/erpnext
 
 ---
 
+## ERPNext Webhook Setup (both options)
+
+This is a **one-time ERPNext configuration** required for incremental re-indexing. It applies regardless of which auth option you chose. Webhooks fire when documents are submitted or updated; the handler at `POST /webhook/erpnext` verifies the HMAC signature, fetches the full document from ERPNext, and re-indexes it in Qdrant.
+
+### Required webhook records
+
+Create the following Webhook records in ERPNext desk (or via the REST API). For each one:
+- **Request URL**: `http://127.0.0.1:8000/webhook/erpnext` (Option A / local) or `https://api.procurement-rag.example.com/webhook/erpnext` (Option B / prod)
+- **Request Method**: POST
+- **Request Structure**: JSON
+- **Webhook Secret**: must match `WEBHOOK_SECRET` in your `.env`
+- **Webhook Data** (two rows — maps Frappe's `name` field to the key our handler reads):
+
+  | Fieldname | Key      |
+  |-----------|----------|
+  | `doctype` | `doctype`|
+  | `name`    | `docname`|
+
+| Webhook Name              | Doctype           | Event                    | Why                                              |
+|---------------------------|-------------------|--------------------------|--------------------------------------------------|
+| `po-on-submit`            | Purchase Order    | `on_submit`              | Index POs when first submitted                   |
+| `po-on-update-submitted`  | Purchase Order    | `on_update_after_submit` | Re-index if allowed fields change on a live PO   |
+| `po-on-cancel`            | Purchase Order    | `on_cancel`              | Re-index with status=Cancelled when PO cancelled |
+| `contract-on-submit`      | Contract          | `on_submit`              | Index contracts when submitted                   |
+| `contract-on-update`      | Contract          | `on_update`              | Re-index contracts saved/modified                |
+| `scorecard-on-update`     | Supplier Scorecard| `on_update`              | Scorecards are not submittable; update only      |
+
+> **Note:** `on_submit` is not valid for Supplier Scorecard — it is not a submittable doctype in ERPNext.
+
+### Via REST API (scripted setup)
+
+```python
+import urllib.request, json
+
+BASE = "http://127.0.0.1:8005"   # your ERPNext URL
+AUTH = "token <api_key>:<api_secret>"
+SECRET = "<your WEBHOOK_SECRET>"
+URL = "http://127.0.0.1:8000/webhook/erpnext"
+
+WEBHOOKS = [
+    ("po-on-submit",           "Purchase Order",     "on_submit"),
+    ("po-on-update-submitted", "Purchase Order",     "on_update_after_submit"),
+    ("po-on-cancel",           "Purchase Order",     "on_cancel"),
+    ("contract-on-submit",     "Contract",           "on_submit"),
+    ("contract-on-update",     "Contract",           "on_update"),
+    ("scorecard-on-update",    "Supplier Scorecard", "on_update"),
+]
+
+DATA_FIELDS = [
+    {"doctype": "Webhook Data", "fieldname": "doctype", "key": "doctype"},
+    {"doctype": "Webhook Data", "fieldname": "name",    "key": "docname"},
+]
+
+for wname, doctype, event in WEBHOOKS:
+    payload = json.dumps({
+        "doctype": "Webhook", "name": wname,
+        "webhook_doctype": doctype, "webhook_docevent": event,
+        "request_url": URL, "request_method": "POST",
+        "request_structure": "JSON", "enabled": 1,
+        "webhook_secret": SECRET, "webhook_data": DATA_FIELDS,
+    }).encode()
+    req = urllib.request.Request(f"{BASE}/api/resource/Webhook", data=payload,
+        headers={"Authorization": AUTH, "Content-Type": "application/json"}, method="POST")
+    resp = urllib.request.urlopen(req)
+    print(json.loads(resp.read())["data"]["name"])
+```
+
+### How modifications are handled
+
+The webhook handler (`ingestion/webhook_handler.py`) is event-agnostic: for any event it calls `vector_store.delete_by_docname(docname)` then re-indexes the full document. This means:
+
+- **New PO submitted** → `on_submit` fires → indexed fresh
+- **PO amended** → amendment creates a new PO (new `docname`) → `on_submit` fires again on the amendment
+- **PO field updated after submit** → `on_update_after_submit` fires → old vectors deleted, new ones upserted
+- **Contract updated** → `on_update` fires → re-indexed with latest content
+- **Scorecard updated** → `on_update` fires → re-indexed
+
+---
+
 ## Implementation Sequence (both options)
 
 Inserts into `IMPLEMENTATION_PLAN.md` at:
