@@ -240,7 +240,10 @@ Pipeline steps (all wrapped in Langfuse spans):
 ```python
 app = FastAPI()
 
+GET  /auth/login      # redirect to ERPNext OAuth2 authorize endpoint
+GET  /auth/callback   # exchange code → roles → mint JWT
 POST /query           # {"question": str, "filters": dict|null} → pipeline response
+                      #   requires Authorization: Bearer <jwt> (require_allowed_role dependency)
 POST /webhook/erpnext # delegated to webhook_handler router
 POST /ingest/full     # manual full re-index (background task, X-Admin-Secret required)
 GET  /health          # {"status": "ok"}
@@ -251,17 +254,20 @@ Startup event:
 2. Fetch all texts from Qdrant → build BM25 index
 3. Warm up reranker model
 
+Auth modules (`api/auth/`): `oauth2.py` (authorize URL + token exchange + role fetch), `pkce.py` (code verifier/challenge), `jwt_handler.py` (mint + decode), `dependencies.py` (`get_current_user`, `require_allowed_role` FastAPI dependencies).
+
 ---
 
 ## Step 13 — `frontend/app.py`
 
 Streamlit app layout:
+- **Auth gate:** `frontend/auth_ui.py` — shows "Login with ERPNext" button when no JWT in `st.session_state`; handles OAuth2 callback redirect and stores the returned JWT
 - **Sidebar:** supplier filter (text), doctype filter (multiselect), date range, status filter
-- **Main:** `st.chat_input` for question entry
+- **Main:** `st.chat_input` for question entry (shown only after successful login)
 - **Response:** answer text block + collapsible "Sources" expander listing `docname`, `source_doctype`, `supplier` per citation
-- **Session state:** `messages` list (last 10 turns displayed as chat history)
+- **Session state:** `messages` list (last 10 turns displayed as chat history), `jwt` token
 
-Calls `POST {BACKEND_URL}/query` via `httpx`.
+Calls `POST {BACKEND_URL}/query` via `httpx` with `Authorization: Bearer <jwt>` header.
 
 ---
 
@@ -317,7 +323,7 @@ Calls `POST {BACKEND_URL}/query` via `httpx`.
 | `ERPNEXT_URL` | Yes | Base URL of ERPNext instance |
 | `ERPNEXT_API_KEY` | Yes | Frappe API key |
 | `ERPNEXT_API_SECRET` | Yes | Frappe API secret |
-| `WEBHOOK_SECRET` | Yes | HMAC secret for webhook validation |
+| `WEBHOOK_SECRET` | Yes | HMAC secret for webhook validation (base64 HMAC-SHA256) |
 | `OPENAI_API_KEY` | Yes | Used for embeddings + GPT-4o |
 | `QDRANT_URL` | Yes | Qdrant server URL |
 | `QDRANT_API_KEY` | No | Only needed for Qdrant Cloud |
@@ -328,6 +334,13 @@ Calls `POST {BACKEND_URL}/query` via `httpx`.
 | `BACKEND_URL` | Yes | FastAPI base URL (used by Streamlit) |
 | `ADMIN_SECRET` | Yes | Protects `/ingest/full` endpoint |
 | `QUERY_REWRITE_STRATEGY` | No | `hyde` (default) or `step_back` |
+| `ERPNEXT_OAUTH_CLIENT_ID` | Yes | OAuth2 client ID from ERPNext desk → Integrations → OAuth Client |
+| `ERPNEXT_OAUTH_CLIENT_SECRET` | Yes | OAuth2 client secret from the same record |
+| `OAUTH_REDIRECT_URI` | Yes | Callback URL registered in the OAuth client (e.g. `http://localhost:8000/auth/callback`) |
+| `JWT_SECRET` | Yes | Random 256-bit hex — signs session JWTs |
+| `JWT_EXPIRY_HOURS` | No | Session lifetime in hours (default `8`) |
+| `ALLOWED_ROLES` | No | Comma-separated ERPNext roles (default `Purchase Manager,Purchase User,Accounts User,System Manager`) |
+| `FRONTEND_URL` | Yes | Streamlit URL — used by auth callback to redirect after login (e.g. `http://localhost:8501`) |
 
 ---
 
@@ -339,10 +352,14 @@ Calls `POST {BACKEND_URL}/query` via `httpx`.
 - [ ] `GET /health` returns `{"status": "ok"}`
 - [ ] `POST /ingest/full` with valid `X-Admin-Secret` triggers background ingest without errors
 - [ ] Qdrant collection exists and contains points after ingest
-- [ ] `POST /query` with example question returns answer + non-empty sources
+- [ ] `POST /query` without `Authorization` header returns 401
+- [ ] `GET /auth/login` redirects to ERPNext OAuth2 authorize endpoint
+- [ ] Full auth flow: log in as `Purchase Manager` → JWT issued → `POST /query` returns answer + sources
+- [ ] `POST /query` with JWT for a non-allowed role returns 403
 - [ ] Sources reference real `docname` values from Qdrant
-- [ ] Webhook endpoint returns 200 and re-indexes on simulated POST
-- [ ] Streamlit UI renders answer and sources, preserves chat history across turns
+- [ ] Webhook endpoint returns 200 and re-indexes on simulated POST (on_submit / on_cancel / on_update)
+- [ ] Streamlit UI renders login button when unauthenticated; renders answer and sources after login
+- [ ] Streamlit chat history preserved across turns within a session
 - [ ] `python evaluation/evaluate.py` completes and writes `results.json`
 - [ ] `pytest tests/` — all pass, no network calls made
 - [ ] `ruff check .` — no errors

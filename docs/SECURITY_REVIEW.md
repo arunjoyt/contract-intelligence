@@ -1,6 +1,6 @@
 # Security Status
 
-**Last reviewed:** 2026-06-25
+**Last reviewed:** 2026-06-30
 **Method:** Static analysis of all source files (`api/`, `ingestion/`, `retrieval/`, `pipeline/`, `frontend/`, `docker-compose.yml`)
 
 ---
@@ -36,8 +36,13 @@ When `WEBHOOK_SECRET` was not set, the HMAC was computed with an empty key, allo
 
 | Item | Rationale |
 |------|-----------|
-| `/query` has no authentication | By design — auth is planned (Steps 12/13 of `IMPLEMENTATION_PLAN.md`) |
 | `lf-pk-local` / `lf-sk-local` hardcoded in `docker-compose.yml` | Local dev keys only; production must override via `.env` |
+
+## Resolved risks
+
+| Item | Resolution |
+|------|------------|
+| `/query` had no authentication | Resolved — Option B OAuth2 + JWT auth implemented (PR #32). `POST /query` now requires `Authorization: Bearer <jwt>`; users without allowed roles receive 403. |
 
 ---
 

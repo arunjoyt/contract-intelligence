@@ -108,18 +108,25 @@ Point ID is derived as `uuid5(NAMESPACE_DNS, f"{docname}:{chunk_index}")` — de
 
 ## Incremental Indexing via Webhooks
 
-ERPNext fires a webhook on `on_submit` and `on_update` for:
-- `Purchase Order`
-- `Contract`
-- `Supplier Scorecard`
+ERPNext fires webhooks on the following events:
+
+| Doctype            | Event       | Effect                                      |
+|--------------------|-------------|---------------------------------------------|
+| Purchase Order     | `on_submit` | Indexed fresh on submission                 |
+| Purchase Order     | `on_cancel` | Re-indexed with status=Cancelled            |
+| Contract           | `on_submit` | Indexed when contract is submitted          |
+| Contract           | `on_update` | Re-indexed on any desk save                 |
+| Supplier Scorecard | `on_update` | Re-indexed (scorecards are not submittable) |
+
+> **Known gap:** `on_update_after_submit` for Purchase Orders is not supported. Frappe 15 does not fire this webhook event via API or desk UI saves, so edits to a submitted PO (e.g. delivery date, remarks) are not automatically re-indexed. Workaround: `POST /ingest/full`. See `docs/DEPLOYMENT.md` § Future Enhancements.
 
 The webhook handler:
-1. Verifies `X-Frappe-Webhook-Signature` (HMAC-SHA256)
+1. Verifies `X-Frappe-Webhook-Signature` (HMAC-SHA256, base64-encoded)
 2. Fetches the full document via REST API
 3. Calls `vector_store.delete_by_docname(docname)` — removes all old chunks
 4. Re-runs the full parse → chunk → embed → upsert pipeline for that document only
 
-This ensures updated contract terms or revised POs are reflected in the next query without a full re-index.
+This ensures updated contract terms or re-submitted POs are reflected in the next query without a full re-index.
 
 ## BM25 Index
 
@@ -169,6 +176,6 @@ The Langfuse UI is accessible at `http://localhost:3000` (default docker-compose
 - All secrets are loaded from environment variables; `.env` is gitignored
 - No user input is interpolated into Qdrant filter expressions directly — filters are constructed programmatically
 
-### Auth deferral — Phase 4 (current state)
+### Auth — implemented (Option B)
 
-`POST /query` and the Streamlit frontend are **currently unauthenticated** — no ERPNext role check is enforced. This is intentional for the local development build. Full role-gated auth (Option A: HMAC internal token via Frappe whitelist, or Option B: OAuth2 + JWT) is documented in `docs/DEPLOYMENT.md` and will be wired in at Step 12/13 during Phase 6 (deployment). Do not expose the API on a public network without completing that step.
+`POST /query` requires a valid JWT (`Authorization: Bearer <token>`). The JWT is minted by FastAPI after completing the ERPNext OAuth2 Authorization Code + PKCE flow. Role enforcement (`Purchase Manager`, `Purchase User`, `Accounts User`, `System Manager`) happens at the point where the access token is exchanged — unauthorized users receive `403`. JWT lifetime is controlled by `JWT_EXPIRY_HOURS` (default 8h). See `docs/DEPLOYMENT.md` § Option B for setup details.

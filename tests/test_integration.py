@@ -1049,27 +1049,19 @@ def test_erpnext_po_cancel_fires_webhook_and_updates_qdrant(api_http) -> None:
         pass
 
 
-# NOTE: on_update_after_submit E2E is not automatable via the REST API.
+# FUTURE ENHANCEMENT: on_update_after_submit re-indexing is not currently
+# supported and has no automated or manual test.
 #
-# Frappe's on_update_after_submit event only fires when a submitted document is
-# saved from the *desk UI* — neither frappe.client.save nor
-# frappe.desk.form.save.savedocs enqueue the po-on-update-submitted webhook via
-# API.  Confirmed by inspecting tabWebhook Request Log: zero entries for
-# po-on-update-submitted after any API-triggered save.
+# Investigation confirmed that Frappe 15 does not fire the on_update_after_submit
+# webhook for Purchase Orders under any tested trigger — neither via REST API
+# (frappe.client.save, frappe.desk.form.save.savedocs) nor via a desk UI save.
+# tabWebhook Request Log contains zero entries for po-on-update-submitted
+# across all attempts.
 #
-# Manual verification steps (run after any change to the webhook or handler):
-#   1. Open ERPNext desk → Purchase Order → open any submitted PO.
-#   2. Edit a field (e.g. Remarks) and click Save.
-#   3. Wait ~10 s and confirm the Qdrant point for that docname is refreshed:
-#      curl -s http://localhost:6333/collections/procurement/points/scroll \
-#        -d '{"filter":{"must":[{"key":"docname","match":{"value":"<NAME>"}}]},
-#             "limit":1,"with_payload":true}' | jq .result.points[0].payload
-#   4. Verify source_doctype, supplier, and status match ERPNext.
-#
-# The on_submit and on_cancel E2E tests (above) already exercise the full
-# ERPNext → Frappe worker → FastAPI → Qdrant chain.  The update path goes
-# through the same handler code, so handler correctness is also covered by
-# test_webhook_handler.py unit tests.
+# The po-on-update-submitted webhook has been removed from the ERPNext
+# configuration (see docs/DEPLOYMENT.md § Future Enhancements).  If Frappe adds
+# reliable support for this event in a future release, re-instate the webhook
+# and add an E2E test here.
 
 
 @live

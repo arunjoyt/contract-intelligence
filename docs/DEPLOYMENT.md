@@ -261,7 +261,7 @@ https://api.procurement-rag.example.com/webhook/erpnext
 
 ## ERPNext Webhook Setup (both options)
 
-This is a **one-time ERPNext configuration** required for incremental re-indexing. It applies regardless of which auth option you chose. Webhooks fire when documents are submitted or updated; the handler at `POST /webhook/erpnext` verifies the HMAC signature, fetches the full document from ERPNext, and re-indexes it in Qdrant.
+This is a **one-time ERPNext configuration** required for incremental re-indexing. It applies regardless of which auth option you chose. Webhooks fire when documents are submitted, cancelled, or updated; the handler at `POST /webhook/erpnext` verifies the HMAC signature, fetches the full document from ERPNext, and re-indexes it in Qdrant.
 
 ### Required webhook records
 
@@ -277,16 +277,17 @@ Create the following Webhook records in ERPNext desk (or via the REST API). For 
   | `doctype` | `doctype`|
   | `name`    | `docname`|
 
-| Webhook Name              | Doctype           | Event                    | Why                                              |
-|---------------------------|-------------------|--------------------------|--------------------------------------------------|
-| `po-on-submit`            | Purchase Order    | `on_submit`              | Index POs when first submitted                   |
-| `po-on-update-submitted`  | Purchase Order    | `on_update_after_submit` | Re-index if allowed fields change on a live PO   |
-| `po-on-cancel`            | Purchase Order    | `on_cancel`              | Re-index with status=Cancelled when PO cancelled |
-| `contract-on-submit`      | Contract          | `on_submit`              | Index contracts when submitted                   |
-| `contract-on-update`      | Contract          | `on_update`              | Re-index contracts saved/modified                |
-| `scorecard-on-update`     | Supplier Scorecard| `on_update`              | Scorecards are not submittable; update only      |
+| Webhook Name              | Doctype           | Event       | Why                                              |
+|---------------------------|-------------------|-------------|--------------------------------------------------|
+| `po-on-submit`            | Purchase Order    | `on_submit` | Index POs when first submitted                   |
+| `po-on-cancel`            | Purchase Order    | `on_cancel` | Re-index with status=Cancelled when PO cancelled |
+| `contract-on-submit`      | Contract          | `on_submit` | Index contracts when submitted                   |
+| `contract-on-update`      | Contract          | `on_update` | Re-index contracts saved/modified                |
+| `scorecard-on-update`     | Supplier Scorecard| `on_update` | Scorecards are not submittable; update only      |
 
 > **Note:** `on_submit` is not valid for Supplier Scorecard — it is not a submittable doctype in ERPNext.
+
+> **Note:** `on_update_after_submit` for Purchase Orders is **not configured**. Investigation confirmed that Frappe 15 does not reliably fire this event via REST API or desk UI saves. See [Future Enhancements](#future-enhancements) below.
 
 ### Via REST API (scripted setup)
 
@@ -299,12 +300,11 @@ SECRET = "<your WEBHOOK_SECRET>"
 URL = "http://127.0.0.1:8000/webhook/erpnext"
 
 WEBHOOKS = [
-    ("po-on-submit",           "Purchase Order",     "on_submit"),
-    ("po-on-update-submitted", "Purchase Order",     "on_update_after_submit"),
-    ("po-on-cancel",           "Purchase Order",     "on_cancel"),
-    ("contract-on-submit",     "Contract",           "on_submit"),
-    ("contract-on-update",     "Contract",           "on_update"),
-    ("scorecard-on-update",    "Supplier Scorecard", "on_update"),
+    ("po-on-submit",       "Purchase Order",     "on_submit"),
+    ("po-on-cancel",       "Purchase Order",     "on_cancel"),
+    ("contract-on-submit", "Contract",           "on_submit"),
+    ("contract-on-update", "Contract",           "on_update"),
+    ("scorecard-on-update","Supplier Scorecard", "on_update"),
 ]
 
 DATA_FIELDS = [
@@ -332,18 +332,41 @@ The webhook handler (`ingestion/webhook_handler.py`) is event-agnostic: for any 
 
 - **New PO submitted** → `on_submit` fires → indexed fresh
 - **PO amended** → amendment creates a new PO (new `docname`) → `on_submit` fires again on the amendment
-- **PO field updated after submit** → `on_update_after_submit` fires → old vectors deleted, new ones upserted
+- **PO cancelled** → `on_cancel` fires → re-indexed with status=Cancelled
 - **Contract updated** → `on_update` fires → re-indexed with latest content
 - **Scorecard updated** → `on_update` fires → re-indexed
 
+> **Known gap:** edits to a submitted PO (e.g. changing delivery date or remarks) do not trigger re-indexing. Frappe 15 does not reliably fire `on_update_after_submit` via API or desk saves. The Qdrant vector for a live PO will reflect the state at submission time until the next `on_cancel` or a manual full re-index (`POST /ingest/full`). See [Future Enhancements](#future-enhancements).
+
 ---
 
-## Implementation Sequence (both options)
+## What was built — Option B (implemented, PR #32)
 
-Inserts into `IMPLEMENTATION_PLAN.md` at:
+Option B was chosen and merged. The table below maps the delivered modules to `IMPLEMENTATION_PLAN.md` steps:
 
-| Step | Option A | Option B |
+| Step | Module | What was added |
 |---|---|---|
-| **Step 12** (FastAPI) | Add `api/auth/internal_token.py`; bind to `127.0.0.1:8000` | Add `api/auth/` OAuth2 modules + `routers/auth.py` |
-| **Step 13** (Streamlit) | Build Frappe app (`hooks.py`, `api.py`, `procurement_chat.js`) | Add `auth_ui.py`; gate chat UI behind session JWT |
-| **Step 15** (Docker Compose) | Bind `app` to `127.0.0.1:8000`; all others on `rag_internal` | `rag_internal` network; nginx as sole public gateway |
+| **Step 12** (FastAPI) | `api/auth/` + `api/routers/auth.py` | OAuth2 authorize URL, PKCE, token exchange, role fetch, JWT mint/decode, `require_allowed_role` dependency wired onto `POST /query` |
+| **Step 13** (Streamlit) | `frontend/auth_ui.py` | Login page, OAuth2 redirect, JWT storage in `st.session_state`; main chat UI gated behind session JWT |
+| **Step 15** (Docker Compose) | `docker-compose.yml` | Services on `rag_internal` network; nginx as sole public gateway |
+
+Option A (Frappe custom app) was not implemented — use the Option A section above if you later need native ERPNext desk integration.
+
+---
+
+## Future Enhancements
+
+### PO re-indexing on post-submit edits (`on_update_after_submit`)
+
+**Status:** Not implemented — blocked by Frappe 15 platform limitation.
+
+**Problem:** When a buyer edits a field on an already-submitted Purchase Order (e.g. adjusting the delivery date or adding remarks), the Qdrant vector is not updated. The indexed document reflects the state at submission time.
+
+**Root cause:** Frappe 15 does not reliably fire the `on_update_after_submit` webhook event. Tested approaches that all failed to enqueue the webhook:
+- `frappe.client.save` via REST API
+- `frappe.desk.form.save.savedocs` via REST API
+- Save from the ERPNext desk UI
+
+**Workaround:** Run a full re-index (`POST /ingest/full`) after bulk PO edits, or wait for the next `on_cancel`/re-submission event.
+
+**When to revisit:** If a future Frappe release resolves this, add the `po-on-update-submitted` webhook back (it is already handled by the event-agnostic webhook handler) and reinstate the E2E integration test in `tests/test_integration.py`.
