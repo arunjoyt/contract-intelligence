@@ -41,3 +41,5 @@ evaluation/results.json
 
 # Docker
 docker-compose.override.yml
+docker-compose.local-prod.yml
+nginx/certs/

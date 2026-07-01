@@ -1,3 +1,9 @@
+networks:
+  rag_internal:
+    driver: bridge
+    # No public ports — nginx is the sole ingress. All inter-service traffic
+    # stays on this network; only nginx binds host ports 80/443.
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -7,8 +13,7 @@ services:
       POSTGRES_DB: langfuse
     volumes:
       - pg_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    networks: [rag_internal]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U langfuse"]
       interval: 5s
@@ -24,28 +29,26 @@ services:
       DATABASE_URL: postgresql://langfuse:langfuse@postgres:5432/langfuse
       NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET}
       SALT: ${LANGFUSE_SALT}
-      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_URL: ${LANGFUSE_NEXTAUTH_URL:-http://localhost:3000}
       TELEMETRY_ENABLED: "false"
-      # Auto-seed a project so LANGFUSE_PUBLIC_KEY / SECRET_KEY work immediately
+      # Seed a project on first boot so LANGFUSE_PUBLIC_KEY / SECRET_KEY work immediately.
+      # These must match the keys set in .env.
       LANGFUSE_INIT_ORG_ID: procurement-org
       LANGFUSE_INIT_ORG_NAME: Procurement
       LANGFUSE_INIT_PROJECT_ID: procurement-project
       LANGFUSE_INIT_PROJECT_NAME: procurement-rag
-      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: lf-pk-local
-      LANGFUSE_INIT_PROJECT_SECRET_KEY: lf-sk-local
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
       LANGFUSE_INIT_USER_EMAIL: admin@localhost.local
       LANGFUSE_INIT_USER_NAME: Admin
       LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_ADMIN_PASSWORD}
-    ports:
-      - "3000:3000"
+    networks: [rag_internal]
 
   qdrant:
     image: qdrant/qdrant:latest
     volumes:
       - qdrant_data:/qdrant/storage
-    ports:
-      - "6333:6333"
-      - "6334:6334"
+    networks: [rag_internal]
 
   app:
     build: .
@@ -54,16 +57,33 @@ services:
       - langfuse
     env_file: .env
     environment:
-      # Override to use container service names instead of localhost
+      # Override localhost URLs with container service names.
       QDRANT_URL: http://qdrant:6333
       LANGFUSE_HOST: http://langfuse:3000
-      LANGFUSE_PUBLIC_KEY: lf-pk-local
-      LANGFUSE_SECRET_KEY: lf-sk-local
-      # host.docker.internal resolves to the Mac host — allows the container to
-      # reach ERPNext running locally outside Docker (127.0.0.1 is loopback-only)
-      ERPNEXT_URL: http://host.docker.internal:8005
+    networks: [rag_internal]
+
+  frontend:
+    build: .
+    command: streamlit run frontend/app.py --server.port 8501 --server.address 0.0.0.0
+    depends_on:
+      - app
+    env_file: .env
+    environment:
+      BACKEND_URL: http://app:8000
+    networks: [rag_internal]
+
+  nginx:
+    image: nginx:alpine
     ports:
-      - "8000:8000"
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    depends_on:
+      - app
+      - frontend
+    networks: [rag_internal]
 
 volumes:
   pg_data:
