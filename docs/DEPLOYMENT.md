@@ -354,6 +354,117 @@ Option A (Frappe custom app) was not implemented — use the Option A section ab
 
 ---
 
+## AWS Deployment (Option B, single EC2 instance)
+
+This section covers running the existing `docker-compose.yml` topology (nginx as sole public ingress,
+everything else on the internal `rag_internal` network) on a single AWS EC2 instance. It assumes ERPNext
+runs on a separate/existing server (self-hosted bench or Frappe Cloud) reachable over the internet — not
+on the same instance or VPC.
+
+For a more "cloud-native" setup (ECS/Fargate, RDS, ALB), the services would need to be split apart
+individually; that is a larger lift than a single `docker compose up -d` and is not covered here.
+
+### 1. Provision the instance
+
+- **AMI**: Ubuntu 22.04 LTS or Amazon Linux 2023.
+- **Size**: `t3.large` (2 vCPU / 8GB) minimum — Qdrant, Langfuse+Postgres, FastAPI, Streamlit, nginx, and
+  the reranker's cross-encoder model all run on one box.
+- **Storage**: 30GB gp3 (Qdrant vectors + Postgres + Docker images).
+- **Security group**:
+  - Inbound: 22 (SSH, restrict to your IP), 80, 443 (0.0.0.0/0)
+  - Outbound: all (needed to reach ERPNext, OpenAI, and for OAuth/webhook round-trips)
+  - Do **not** expose 6333 (Qdrant), 3000 (Langfuse), or 5432 (Postgres) — they must stay on the internal
+    `rag_internal` Docker network, same as the existing compose file enforces.
+- Allocate an **Elastic IP** and associate it with the instance so DNS survives reboots/replacements.
+
+### 2. DNS (Route53)
+
+Create two `A` records pointing at the Elastic IP:
+```
+procurement-rag.<yourdomain>      → Elastic IP
+api.procurement-rag.<yourdomain>  → Elastic IP
+```
+Wait for propagation before running certbot — it validates ownership via HTTP-01 on port 80.
+
+### 3. Bootstrap the box
+
+```bash
+ssh ubuntu@<elastic-ip>
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER   # log out/in after this
+sudo apt install -y docker-compose-plugin certbot
+```
+
+### 4. Get the code + secrets onto the box
+
+```bash
+git clone <your-repo-url> procurement-rag && cd procurement-rag
+cp .env.example .env
+```
+
+Fill in `.env` per the production checklist in the README — generate secrets with `openssl rand -hex 32`:
+`WEBHOOK_SECRET`, `ADMIN_SECRET`, `JWT_SECRET`, `LANGFUSE_NEXTAUTH_SECRET`, `LANGFUSE_SALT`,
+`LANGFUSE_ADMIN_PASSWORD`, and `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` (any string — they self-seed on
+first Langfuse boot). Plus:
+
+```bash
+ERPNEXT_URL=https://<your-existing-erpnext-host>
+ERPNEXT_API_KEY=...
+ERPNEXT_API_SECRET=...
+OPENAI_API_KEY=...
+OAUTH_REDIRECT_URI=https://api.procurement-rag.<yourdomain>/auth/callback
+FRONTEND_URL=https://procurement-rag.<yourdomain>
+PUBLIC_API_URL=https://api.procurement-rag.<yourdomain>
+```
+
+Since ERPNext is a separate/existing server, confirm it's reachable from the EC2 box
+(`curl -I $ERPNEXT_URL` from the instance) before proceeding — if it's currently only on a private
+network or localhost, that's the one networking gap to close first.
+
+### 5. TLS certs
+
+```bash
+sudo certbot certonly --standalone \
+  -d procurement-rag.<yourdomain> \
+  -d api.procurement-rag.<yourdomain>
+```
+Edit `nginx/nginx.conf`, replacing every `example.com` with `<yourdomain>`.
+
+### 6. ERPNext-side config (on the existing ERPNext server)
+
+- **Integrations → OAuth Client**: update Redirect URI to
+  `https://api.procurement-rag.<yourdomain>/auth/callback`.
+- **Webhook records**: update each `request_url` to
+  `https://api.procurement-rag.<yourdomain>/webhook/erpnext` (see the webhook table earlier in this
+  document).
+
+### 7. Launch
+
+```bash
+docker compose up -d
+docker compose ps   # confirm all 6 services healthy
+```
+
+### 8. Verify
+
+```bash
+curl https://api.procurement-rag.<yourdomain>/health
+curl -I https://<elastic-ip>:6333   # should fail/timeout — not publicly reachable
+```
+Then in a browser: `https://procurement-rag.<yourdomain>` → **Login with ERPNext** → sign in as
+`Purchase Manager` → run a query and confirm citations come back. Trigger a real ERPNext webhook (e.g.
+submit a PO) and confirm it re-indexes.
+
+### 9. Ongoing ops
+
+- Cert renewal cron (see header comment in `nginx/nginx.conf`):
+  `0 3 * * * certbot renew --quiet && docker compose exec nginx nginx -s reload`
+- Back up the `pg_data` and `qdrant_data` named volumes periodically — an EBS snapshot of the instance is
+  the simplest option for a single-box deployment.
+- Deploys: `git pull && docker compose up -d --build`.
+
+---
+
 ## Future Enhancements
 
 ### PO re-indexing on post-submit edits (`on_update_after_submit`)
