@@ -128,7 +128,15 @@ See `docs/DEPLOYMENT.md` for the full topology and step-by-step instructions. Th
      -d api.procurement-rag.example.com
    ```
 2. Edit `nginx/nginx.conf` — replace `example.com` with your actual domain.
-3. Fill in production values in `.env` (strong random `WEBHOOK_SECRET`, `ADMIN_SECRET`, real `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`, production OAuth redirect URIs).
+3. Fill in production values in `.env`:
+   - Strong random values for `WEBHOOK_SECRET`, `ADMIN_SECRET`, `JWT_SECRET`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`
+   - Set URL vars to your actual domains:
+     ```
+     OAUTH_REDIRECT_URI=https://api.procurement-rag.example.com/auth/callback
+     FRONTEND_URL=https://procurement-rag.example.com
+     PUBLIC_API_URL=https://api.procurement-rag.example.com
+     ```
+   - Update the ERPNext OAuth client's Redirect URI to match `OAUTH_REDIRECT_URI`
 4. Start everything:
    ```bash
    docker compose up -d
@@ -147,6 +155,7 @@ See `.env.example` for the full list with generation instructions. Key groups:
 | Qdrant | `QDRANT_URL`, `QDRANT_COLLECTION` | Vector store |
 | Langfuse | `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST` | Tracing |
 | Auth | `ERPNEXT_OAUTH_CLIENT_ID`, `ERPNEXT_OAUTH_CLIENT_SECRET`, `JWT_SECRET`, `ALLOWED_ROLES` | OAuth2 + JWT |
+| URLs | `OAUTH_REDIRECT_URI`, `FRONTEND_URL`, `PUBLIC_API_URL` | OAuth callback and post-login redirect targets; must use public domains in production |
 | Admin | `ADMIN_SECRET` | Gate for `POST /ingest/full` |
 | Pipeline | `QUERY_REWRITE_STRATEGY` | `hyde` (default) or `step_back` |
 
