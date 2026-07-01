@@ -1,10 +1,33 @@
+# Local development override — exposes service ports directly to the host.
+#
+# Usage (run everything in Docker locally):
+#   docker compose -f docker-compose.yml -f docker-compose.frontend.yml up -d
+#
+# For the usual local dev workflow (infra in Docker, app/frontend natively), this
+# file is not needed — see the Quick Start section in README.md instead.
+
 services:
-  frontend:
-    build: .
-    command: streamlit run frontend/app.py --server.port 8501 --server.address 0.0.0.0
-    depends_on:
-      - app
+  app:
+    ports:
+      - "8000:8000"
     environment:
-      BACKEND_URL: http://app:8000
+      # host.docker.internal resolves to the Mac host — lets the container reach
+      # a locally running ERPNext instance (127.0.0.1 is loopback-only inside Docker).
+      ERPNEXT_URL: http://host.docker.internal:8005
+
+  frontend:
     ports:
       - "8501:8501"
+
+  qdrant:
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+
+  langfuse:
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  postgres:
+    ports:
+      - "127.0.0.1:5432:5432"
