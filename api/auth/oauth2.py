@@ -72,7 +72,9 @@ async def fetch_user_roles(access_token: str) -> tuple[str, list[str]]:
         profile_data = profile_resp.json()
         if "message" in profile_data:
             profile_data = profile_data["message"]
-        username: str = profile_data.get("sub", "") or profile_data.get("email", "")
+        # "sub" is a pairwise OIDC identifier (hashed, from User Social Login) — not
+        # usable for the User.email lookup below. "email" is the real value we need.
+        username: str = profile_data.get("email", "") or profile_data.get("sub", "")
         if not username:
             raise ValueError(f"No subject in openid profile response: {profile_data}")
 
