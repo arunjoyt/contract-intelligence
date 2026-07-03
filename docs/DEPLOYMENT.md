@@ -270,13 +270,20 @@ Create the following Webhook records in ERPNext desk (or via the REST API). For 
 - **Request URL**: `http://127.0.0.1:8000/webhook/erpnext` (Option A / local) or `https://api.procurement-rag.example.com/webhook/erpnext` (Option B / prod)
 - **Request Method**: POST
 - **Request Structure**: JSON
+- **Enable Security**: must be checked. Without it, Frappe never sends the
+  `X-Frappe-Webhook-Signature` header, and `_verify_signature()` in
+  `ingestion/webhook_handler.py` will reject every request with `401 Invalid webhook signature`.
 - **Webhook Secret**: must match `WEBHOOK_SECRET` in your `.env`
-- **Webhook Data** (two rows — maps Frappe's `name` field to the key our handler reads):
+- **JSON Request Body** (`webhook_json` — this field only appears once Request Structure is set
+  to `JSON`; the separate "Webhook Data" table is for `Form URL-Encoded` and doesn't apply here).
+  Enter this Jinja template exactly:
 
-  | Fieldname | Key      |
-  |-----------|----------|
-  | `doctype` | `doctype`|
-  | `name`    | `docname`|
+  ```json
+  {"doctype": "{{ doc.doctype }}", "docname": "{{ doc.name }}"}
+  ```
+
+  The handler reads `docname` directly from the JSON body, so this maps straight through with
+  no extra field-mapping step needed.
 
 | Webhook Name              | Doctype           | Event       | Why                                              |
 |---------------------------|-------------------|-------------|--------------------------------------------------|
@@ -308,10 +315,7 @@ WEBHOOKS = [
     ("scorecard-on-update","Supplier Scorecard", "on_update"),
 ]
 
-DATA_FIELDS = [
-    {"doctype": "Webhook Data", "fieldname": "doctype", "key": "doctype"},
-    {"doctype": "Webhook Data", "fieldname": "name",    "key": "docname"},
-]
+WEBHOOK_JSON = '{"doctype": "{{ doc.doctype }}", "docname": "{{ doc.name }}"}'
 
 for wname, doctype, event in WEBHOOKS:
     payload = json.dumps({
@@ -319,7 +323,8 @@ for wname, doctype, event in WEBHOOKS:
         "webhook_doctype": doctype, "webhook_docevent": event,
         "request_url": URL, "request_method": "POST",
         "request_structure": "JSON", "enabled": 1,
-        "webhook_secret": SECRET, "webhook_data": DATA_FIELDS,
+        "enable_security": 1, "webhook_secret": SECRET,
+        "webhook_json": WEBHOOK_JSON,
     }).encode()
     req = urllib.request.Request(f"{BASE}/api/resource/Webhook", data=payload,
         headers={"Authorization": AUTH, "Content-Type": "application/json"}, method="POST")
