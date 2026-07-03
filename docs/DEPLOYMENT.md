@@ -122,7 +122,8 @@ OAuth2 is built into Frappe — no custom app needed:
 
 1. Go to ERPNext desk → **Integrations → OAuth Client**
 2. Create a new OAuth2 client
-3. Set **Redirect URI** to `https://procurement-rag.example.com/auth/callback`
+3. Set **Redirect URI** to `https://api.procurement-rag.example.com/auth/callback` (the API domain —
+   `/auth/callback` is a FastAPI route, not served by the Streamlit frontend)
 4. Note the generated `client_id` and `client_secret`
 
 ### Auth Flow
@@ -134,7 +135,7 @@ OAuth2 is built into Frappe — no custom app needed:
      ?client_id=...&redirect_uri=...&response_type=code&code_challenge=...&scope=openid+all
    ```
 3. User logs in on the ERPNext site — the RAG app never sees the password
-4. ERPNext redirects back to `https://procurement-rag.example.com/auth/callback?code=...`
+4. ERPNext redirects back to `https://api.procurement-rag.example.com/auth/callback?code=...`
 5. FastAPI exchanges the code for an access token via `POST {ERPNEXT_URL}/api/method/frappe.integrations.oauth2.get_token`
 6. FastAPI fetches the user's roles via `GET {ERPNEXT_URL}/api/resource/User/{username}?fields=["name","roles"]`
 7. If no allowed roles → `403 Forbidden`
@@ -179,7 +180,7 @@ Key additions to `api/main.py`: mount `auth_router`; apply `require_allowed_role
 # OAuth2 client — created in ERPNext desk → Integrations → OAuth Client
 ERPNEXT_OAUTH_CLIENT_ID=<from ERPNext>
 ERPNEXT_OAUTH_CLIENT_SECRET=<from ERPNext>
-OAUTH_REDIRECT_URI=https://procurement-rag.example.com/auth/callback
+OAUTH_REDIRECT_URI=https://api.procurement-rag.example.com/auth/callback
 
 # JWT session
 JWT_SECRET=<random 256-bit hex>
