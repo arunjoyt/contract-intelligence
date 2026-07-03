@@ -451,7 +451,18 @@ docker compose up -d
 docker compose ps   # confirm all 6 services healthy
 ```
 
-### 8. Verify
+### 8. Trigger the initial full ingest
+
+Webhooks only cover documents created/changed *after* they're wired up — existing ERPNext data
+needs one manual full re-index:
+
+```bash
+curl -X POST https://api.procurement-rag.<yourdomain>/ingest/full \
+  -H "X-Admin-Secret: <your ADMIN_SECRET from .env>"
+```
+Runs as a background task; watch progress with `docker compose logs app -f` on the instance.
+
+### 9. Verify
 
 ```bash
 curl https://api.procurement-rag.<yourdomain>/health
@@ -461,7 +472,7 @@ Then in a browser: `https://procurement-rag.<yourdomain>` → **Login with ERPNe
 `Purchase Manager` → run a query and confirm citations come back. Trigger a real ERPNext webhook (e.g.
 submit a PO) and confirm it re-indexes.
 
-### 9. Ongoing ops
+### 10. Ongoing ops
 
 - Cert renewal cron (see header comment in `nginx/nginx.conf`):
   `0 3 * * * certbot renew --quiet && docker compose exec nginx nginx -s reload`
