@@ -6,9 +6,14 @@
 # nginx's own runtime variables ($host, $scheme, $request_uri, etc.) are left
 # untouched since they aren't OS environment variables.
 
-# Redirect all HTTP traffic to HTTPS
+# Redirect all HTTP traffic to HTTPS.
+# `default_server` makes this win over the base nginx:alpine image's leftover
+# /etc/nginx/conf.d/default.conf (a "Welcome to nginx" page on port 80,
+# server_name localhost) — without it, that file sorts first alphabetically
+# and silently catches any request with a Host header that isn't ours (e.g.
+# bots hitting the server's raw IP).
 server {
-    listen 80;
+    listen 80 default_server;
     server_name ${FRONTEND_DOMAIN} ${API_DOMAIN};
     return 301 https://$host$request_uri;
 }
