@@ -210,6 +210,27 @@ def test_auth_callback_invalid_state_returns_400(client):
     assert resp.status_code == 400
 
 
+def test_auth_callback_duplicate_request_replays_same_redirect(client, monkeypatch):
+    monkeypatch.setattr(
+        "api.routers.auth.exchange_code_for_token",
+        AsyncMock(return_value={"access_token": "erp-token"}),
+    )
+    monkeypatch.setattr(
+        "api.routers.auth.fetch_user_roles",
+        AsyncMock(return_value=("user@example.com", ["System Manager"])),
+    )
+
+    login_resp = client.get("/auth/login", follow_redirects=False)
+    state = login_resp.headers["location"].split("state=")[1].split("&")[0]
+
+    first = client.get(f"/auth/callback?code=somecode&state={state}", follow_redirects=False)
+    assert first.status_code == 307
+
+    second = client.get(f"/auth/callback?code=somecode&state={state}", follow_redirects=False)
+    assert second.status_code == 307
+    assert second.headers["location"] == first.headers["location"]
+
+
 # ---------------------------------------------------------------------------
 # /ingest/full
 # ---------------------------------------------------------------------------

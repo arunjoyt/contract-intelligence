@@ -94,6 +94,7 @@ async def _lifespan(app: FastAPI):
     app.state.erpnext_client = erpnext_client
     app.state.webhook_secret = webhook_secret
     app.state.oauth_state: dict[str, str] = {}
+    app.state.oauth_completed: dict[str, tuple[float, str]] = {}
 
     logger.info("Startup complete — collection ready, BM25 built, reranker warm")
 

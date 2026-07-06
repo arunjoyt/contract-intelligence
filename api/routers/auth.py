@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+import time
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -14,6 +15,13 @@ from api.auth.pkce import generate_code_verifier
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# ERPNext's own OAuth confirmation page (oauth_confirmation.html) binds "Allow" with a
+# plain click handler that calls window.location.replace(success_url) — a double-click
+# fires it twice, sending two requests for the same code/state before the first
+# navigation completes. Cache completed logins briefly so the replay gets the same
+# redirect instead of a confusing "invalid state" error after a successful login.
+_OAUTH_COMPLETED_TTL_SECONDS = 60
 
 
 def _allowed_roles() -> list[str]:
@@ -34,6 +42,16 @@ async def login(request: Request) -> RedirectResponse:
 
 @router.get("/callback")
 async def callback(request: Request, code: str, state: str) -> RedirectResponse:
+    completed: dict[str, tuple[float, str]] = request.app.state.oauth_completed
+    now = time.monotonic()
+    for cached_state, (completed_at, _) in list(completed.items()):
+        if now - completed_at > _OAUTH_COMPLETED_TTL_SECONDS:
+            del completed[cached_state]
+
+    if state in completed:
+        _, redirect_url = completed[state]
+        return RedirectResponse(redirect_url)
+
     code_verifier: str | None = request.app.state.oauth_state.pop(state, None)
     if not code_verifier:
         raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
@@ -51,4 +69,6 @@ async def callback(request: Request, code: str, state: str) -> RedirectResponse:
 
     jwt_token = mint_token(username=username, roles=roles)
     frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:8501")
-    return RedirectResponse(f"{frontend_url}?token={jwt_token}")
+    redirect_url = f"{frontend_url}?token={jwt_token}"
+    completed[state] = (now, redirect_url)
+    return RedirectResponse(redirect_url)
