@@ -552,6 +552,38 @@ docker compose exec app python3 -c "import urllib.request,json; req=urllib.reque
 This is destructive for that docname's vectors — only use it if you intend to re-trigger indexing for
 it afterward (e.g. re-save/re-submit the doc in ERPNext, or re-run a full ingest).
 
+### 12. Inspecting Langfuse (no UI — no public port)
+
+Langfuse (`langfuse/langfuse:2`) has no `ports:` mapping either — same reasoning as Qdrant. This
+deployed version stores trace data directly in the `postgres` service (not ClickHouse), so it can be
+queried with plain SQL via `psql`, already present in the `postgres:16-alpine` image. Every `/query`
+request creates one row in `traces`; each pipeline stage (`rewrite`, `filter_extraction`, hybrid
+search, `rerank`, `generate`) is a child row in `observations` linked by `trace_id` — see
+`pipeline/query_pipeline.py` for exactly what gets traced.
+
+**Recent traces** (question asked + answer returned):
+```bash
+docker compose exec postgres psql -U langfuse -d langfuse -c "select id, timestamp, input->>'question' as question, output->>'answer' as answer from traces order by timestamp desc limit 10;"
+```
+
+**Full span waterfall for one trace** (swap in an `id` from the query above):
+```bash
+docker compose exec postgres psql -U langfuse -d langfuse -c "select name, type, level, start_time, end_time, model, total_tokens, calculated_total_cost from observations where trace_id = '<trace-id>' order by start_time;"
+```
+
+**Errored spans in the last 24h** (failed generations, retrieval errors, etc.):
+```bash
+docker compose exec postgres psql -U langfuse -d langfuse -c "select trace_id, name, status_message, start_time from observations where level = 'ERROR' and start_time > now() - interval '24 hours' order by start_time desc;"
+```
+
+**Token/cost summary for GPT-4o generations in the last 24h:**
+```bash
+docker compose exec postgres psql -U langfuse -d langfuse -c "select count(*) as generations, sum(total_tokens) as total_tokens, round(sum(calculated_total_cost)::numeric, 4) as total_cost_usd from observations where type = 'GENERATION' and start_time > now() - interval '24 hours';"
+```
+
+All four verified against a real seeded Langfuse instance before writing this up. Full UI access
+(browsing traces visually instead of via SQL) is tracked separately — see issue #41.
+
 ---
 
 ## Future Enhancements
