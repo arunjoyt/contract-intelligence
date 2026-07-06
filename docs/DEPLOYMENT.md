@@ -505,6 +505,53 @@ submit a PO) and confirm it re-indexes.
   via `COPY . .` in the Dockerfile — `--force-recreate` alone reuses the old image and silently keeps
   running stale code.
 
+### 11. Inspecting Qdrant (no UI — no public port)
+
+Qdrant has no `ports:` mapping in `docker-compose.yml` (only reachable on the internal `rag_internal`
+network from `app`), so there's no dashboard to click into on a fresh box. `curl` also isn't installed in
+the `app` image (`python:3.11-slim`), so use Python's own `urllib` from inside the container instead.
+Replace `procurement` with your `QDRANT_COLLECTION` value if it differs.
+
+**Collection info (point count, vector config, status):**
+```bash
+docker compose exec app python3 -c "import urllib.request,json; print(json.dumps(json.load(urllib.request.urlopen('http://qdrant:6333/collections/procurement'))['result'], indent=2))"
+```
+
+**Just the point count** (handy to poll during/after a full ingest — see if it's climbing):
+```bash
+docker compose exec app python3 -c "import urllib.request,json; print(json.load(urllib.request.urlopen('http://qdrant:6333/collections/procurement'))['result']['points_count'])"
+```
+
+**List all collections:**
+```bash
+docker compose exec app python3 -c "import urllib.request,json; print(json.dumps(json.load(urllib.request.urlopen('http://qdrant:6333/collections'))['result'], indent=2))"
+```
+
+**Sample a few points** (inspect payload shape — `source_doctype`, `docname`, `supplier`, etc.):
+```bash
+docker compose exec app python3 -c "import urllib.request,json; req=urllib.request.Request('http://qdrant:6333/collections/procurement/points/scroll', data=json.dumps({'limit':5,'with_payload':True,'with_vector':False}).encode(), headers={'Content-Type':'application/json'}); print(json.dumps(json.load(urllib.request.urlopen(req))['result'], indent=2))"
+```
+
+**Check a specific document was indexed** (filter by `docname`):
+```bash
+docker compose exec app python3 -c "import urllib.request,json; req=urllib.request.Request('http://qdrant:6333/collections/procurement/points/scroll', data=json.dumps({'filter':{'must':[{'key':'docname','match':{'value':'PO-2024-1892'}}]},'limit':10,'with_payload':True,'with_vector':False}).encode(), headers={'Content-Type':'application/json'}); print(json.dumps(json.load(urllib.request.urlopen(req))['result'], indent=2))"
+```
+Replace `PO-2024-1892` with the docname you're checking for.
+
+**Count points by doctype** (e.g. confirm all Purchase Orders got indexed):
+```bash
+docker compose exec app python3 -c "import urllib.request,json; req=urllib.request.Request('http://qdrant:6333/collections/procurement/points/count', data=json.dumps({'filter':{'must':[{'key':'source_doctype','match':{'value':'Purchase Order'}}]}}).encode(), headers={'Content-Type':'application/json'}); print(json.load(urllib.request.urlopen(req))['result'])"
+```
+Swap `'Purchase Order'` for `Contract` / `Supplier Scorecard` / etc.
+
+**Delete all points for a docname** (manual cleanup — e.g. force a clean re-index of one document;
+mirrors what the webhook handler does automatically on `on_submit`/`on_update`):
+```bash
+docker compose exec app python3 -c "import urllib.request,json; req=urllib.request.Request('http://qdrant:6333/collections/procurement/points/delete', data=json.dumps({'filter':{'must':[{'key':'docname','match':{'value':'PO-2024-1892'}}]}}).encode(), headers={'Content-Type':'application/json'}, method='POST'); print(json.load(urllib.request.urlopen(req))['result'])"
+```
+This is destructive for that docname's vectors — only use it if you intend to re-trigger indexing for
+it afterward (e.g. re-save/re-submit the doc in ERPNext, or re-run a full ingest).
+
 ---
 
 ## Future Enhancements
