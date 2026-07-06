@@ -145,6 +145,13 @@ OAuth2 is built into Frappe — no custom app needed:
 
 Role changes in ERPNext take effect at next login (8-hour JWT expiry).
 
+**Duplicate callback tolerance:** ERPNext's own OAuth confirmation page (`oauth_confirmation.html`)
+binds "Allow" with a plain click handler calling `window.location.replace(success_url)` — a
+double-click (or a trackpad registering one tap as two) fires it twice, sending two requests for the
+same `code`/`state` before the first navigation completes. `/auth/callback` caches each completed
+login's redirect for 60s so a duplicate request within that window replays the same successful
+redirect instead of failing on the already-consumed `state`.
+
 ### Allowed Roles
 
 | ERPNext Role | Access |
@@ -239,6 +246,10 @@ services:
 - Domains are set once via `FRONTEND_DOMAIN`/`API_DOMAIN` in `.env` — substituted into nginx's
   config automatically at container start (`nginx/templates/procurement-rag.conf.template`), no
   manual editing of `nginx.conf` required
+- The port-80 redirect block is marked `default_server` — without it, the base `nginx:alpine`
+  image's own leftover `/etc/nginx/conf.d/default.conf` (a stock "Welcome to nginx" page,
+  `server_name localhost`) sorts first alphabetically and silently catches any request whose Host
+  header isn't one of ours (e.g. bots hitting the raw IP)
 - `proxy_read_timeout 120s` on the FastAPI location — LLM calls take 20–30s
 - `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`
 - TLS via certbot / Let's Encrypt
@@ -487,6 +498,12 @@ submit a PO) and confirm it re-indexes.
 - Back up the `pg_data` and `qdrant_data` named volumes periodically — an EBS snapshot of the instance is
   the simplest option for a single-box deployment.
 - Deploys: `git pull && docker compose up -d --build`.
+- **`.env` changes vs. code changes** — `env_file: .env` only loads at container start, so a value
+  change (e.g. rotating `OPENAI_API_KEY` or `WEBHOOK_SECRET`) needs
+  `docker compose up -d --force-recreate <service>`. A **code** change needs a rebuild
+  (`docker compose up -d --build <service>`) since `app`/`frontend` bake the source into the image
+  via `COPY . .` in the Dockerfile — `--force-recreate` alone reuses the old image and silently keeps
+  running stale code.
 
 ---
 
