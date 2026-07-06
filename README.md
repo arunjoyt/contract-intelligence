@@ -121,14 +121,19 @@ procurement-rag/
 
 See `docs/DEPLOYMENT.md` for the full topology and step-by-step instructions. The short version:
 
-1. Provision TLS certs for your domains:
+1. Set your domains in `.env` (bare hostnames, no scheme — substituted into nginx's config
+   automatically at container start, no manual file editing needed):
+   ```
+   FRONTEND_DOMAIN=procurement-rag.example.com
+   API_DOMAIN=api.procurement-rag.example.com
+   ```
+2. Provision TLS certs for those same domains:
    ```bash
    certbot certonly --standalone \
      -d procurement-rag.example.com \
      -d api.procurement-rag.example.com
    ```
-2. Edit `nginx/nginx.conf` — replace `example.com` with your actual domain.
-3. Fill in production values in `.env`:
+3. Fill in the rest of the production values in `.env`:
    - Strong random values for `WEBHOOK_SECRET`, `ADMIN_SECRET`, `JWT_SECRET`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`
    - Set URL vars to your actual domains:
      ```

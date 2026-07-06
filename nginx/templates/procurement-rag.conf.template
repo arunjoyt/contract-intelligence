@@ -1,0 +1,64 @@
+# Substituted by the official nginx:alpine entrypoint (20-envsubst-on-templates.sh)
+# into /etc/nginx/conf.d/procurement-rag.conf on every container start, using
+# FRONTEND_DOMAIN / API_DOMAIN from the environment (see .env / docker-compose.yml).
+#
+# Only variables that exist as real environment variables get substituted —
+# nginx's own runtime variables ($host, $scheme, $request_uri, etc.) are left
+# untouched since they aren't OS environment variables.
+
+# Redirect all HTTP traffic to HTTPS
+server {
+    listen 80;
+    server_name ${FRONTEND_DOMAIN} ${API_DOMAIN};
+    return 301 https://$host$request_uri;
+}
+
+# Streamlit frontend — requires WebSocket upgrade for live updates
+server {
+    listen 443 ssl;
+    server_name ${FRONTEND_DOMAIN};
+
+    ssl_certificate     /etc/letsencrypt/live/${FRONTEND_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${FRONTEND_DOMAIN}/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+    ssl_session_cache   shared:SSL:10m;
+
+    location / {
+        set $upstream_frontend http://frontend:8501;
+        proxy_pass $upstream_frontend;
+        proxy_read_timeout 120s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # WebSocket headers required by Streamlit
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+
+# FastAPI backend — longer timeout for LLM calls (20-30s typical)
+server {
+    listen 443 ssl;
+    server_name ${API_DOMAIN};
+
+    # Both server blocks intentionally point at the FRONTEND_DOMAIN cert directory —
+    # see the note in nginx.conf on why certbot only creates one cert lineage.
+    ssl_certificate     /etc/letsencrypt/live/${FRONTEND_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${FRONTEND_DOMAIN}/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+    ssl_session_cache   shared:SSL:10m;
+
+    location / {
+        set $upstream_app http://app:8000;
+        proxy_pass $upstream_app;
+        proxy_read_timeout 120s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}

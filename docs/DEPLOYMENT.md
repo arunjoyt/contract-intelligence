@@ -236,6 +236,9 @@ services:
 ```
 
 **Nginx configuration notes:**
+- Domains are set once via `FRONTEND_DOMAIN`/`API_DOMAIN` in `.env` — substituted into nginx's
+  config automatically at container start (`nginx/templates/procurement-rag.conf.template`), no
+  manual editing of `nginx.conf` required
 - `proxy_read_timeout 120s` on the FastAPI location — LLM calls take 20–30s
 - `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`
 - TLS via certbot / Let's Encrypt
@@ -421,7 +424,13 @@ OPENAI_API_KEY=...
 OAUTH_REDIRECT_URI=https://api.procurement-rag.<yourdomain>/auth/callback
 FRONTEND_URL=https://procurement-rag.<yourdomain>
 PUBLIC_API_URL=https://api.procurement-rag.<yourdomain>
+FRONTEND_DOMAIN=procurement-rag.<yourdomain>
+API_DOMAIN=api.procurement-rag.<yourdomain>
 ```
+
+`FRONTEND_DOMAIN`/`API_DOMAIN` (bare hostnames, no scheme) drive nginx's config — they're
+substituted into `nginx/templates/procurement-rag.conf.template` automatically on every container
+start, so `nginx/nginx.conf` never needs manual editing and survives `git pull` cleanly.
 
 Since ERPNext is a separate/existing server, confirm it's reachable from the EC2 box
 (`curl -I $ERPNEXT_URL` from the instance) before proceeding — if it's currently only on a private
@@ -434,7 +443,6 @@ sudo certbot certonly --standalone \
   -d procurement-rag.<yourdomain> \
   -d api.procurement-rag.<yourdomain>
 ```
-Edit `nginx/nginx.conf`, replacing every `example.com` with `<yourdomain>`.
 
 ### 6. ERPNext-side config (on the existing ERPNext server)
 
