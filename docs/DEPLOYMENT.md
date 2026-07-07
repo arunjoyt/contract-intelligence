@@ -505,12 +505,28 @@ submit a PO) and confirm it re-indexes.
   via `COPY . .` in the Dockerfile — `--force-recreate` alone reuses the old image and silently keeps
   running stale code.
 
-### 11. Inspecting Qdrant (no UI — no public port)
+### 11. Inspecting Qdrant
 
-Qdrant has no `ports:` mapping in `docker-compose.yml` (only reachable on the internal `rag_internal`
-network from `app`), so there's no dashboard to click into on a fresh box. `curl` also isn't installed in
-the `app` image (`python:3.11-slim`), so use Python's own `urllib` from inside the container instead.
-Replace `procurement` with your `QDRANT_COLLECTION` value if it differs.
+Qdrant ships a built-in web dashboard (`/dashboard`) on its API port, and `docker-compose.yml` binds that
+port to `127.0.0.1` on the host — reachable via SSH tunnel, same as Langfuse (§12), never from the public
+internet. `curl` also isn't installed in the `app` image (`python:3.11-slim`), so the API examples below
+use Python's own `urllib` from inside the container instead. Replace `procurement` with your
+`QDRANT_COLLECTION` value if it differs.
+
+#### Browsing the Qdrant dashboard (SSH tunnel)
+
+`docker-compose.yml` binds Qdrant's port 6333 to `127.0.0.1` on the host (not `0.0.0.0`) — it's still not
+publicly reachable (no security group change needed, same as the "don't expose 3000/6333/5432" rule
+above), but a tunnel from your laptop can reach it:
+
+```bash
+ssh -L 6333:localhost:6333 ubuntu@<elastic-ip>
+```
+
+Then browse `http://localhost:6333/dashboard` on your laptop — collections, point counts, and payload
+schema are browsable with no login (Qdrant has no built-in auth unless `QDRANT_API_KEY` is set).
+
+#### API access (no login needed)
 
 **Collection info (point count, vector config, status):**
 ```bash
