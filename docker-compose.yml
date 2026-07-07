@@ -44,6 +44,10 @@ services:
       LANGFUSE_INIT_USER_EMAIL: admin@localhost.local
       LANGFUSE_INIT_USER_NAME: Admin
       LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_ADMIN_PASSWORD}
+    ports:
+      # Loopback-only — reachable via SSH tunnel from the host, never from the
+      # public internet. See docs/DEPLOYMENT.md §12 "Browsing the Langfuse UI".
+      - "127.0.0.1:3000:3000"
     networks: [rag_internal]
 
   qdrant:

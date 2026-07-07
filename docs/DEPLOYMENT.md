@@ -552,14 +552,31 @@ docker compose exec app python3 -c "import urllib.request,json; req=urllib.reque
 This is destructive for that docname's vectors — only use it if you intend to re-trigger indexing for
 it afterward (e.g. re-save/re-submit the doc in ERPNext, or re-run a full ingest).
 
-### 12. Inspecting Langfuse (no UI — no public port)
+### 12. Inspecting Langfuse
 
-Langfuse (`langfuse/langfuse:2`) has no `ports:` mapping either — same reasoning as Qdrant. This
-deployed version stores trace data directly in the `postgres` service (not ClickHouse), so it can be
-queried with plain SQL via `psql`, already present in the `postgres:16-alpine` image. Every `/query`
-request creates one row in `traces`; each pipeline stage (`rewrite`, `filter_extraction`, hybrid
+Langfuse (`langfuse/langfuse:2`) stores trace data directly in the `postgres` service (not ClickHouse),
+so it can be queried with plain SQL via `psql`, already present in the `postgres:16-alpine` image. Every
+`/query` request creates one row in `traces`; each pipeline stage (`rewrite`, `filter_extraction`, hybrid
 search, `rerank`, `generate`) is a child row in `observations` linked by `trace_id` — see
 `pipeline/query_pipeline.py` for exactly what gets traced.
+
+#### Browsing the Langfuse UI (SSH tunnel)
+
+`docker-compose.yml` binds Langfuse's port 3000 to `127.0.0.1` on the host (not `0.0.0.0`) — it's still
+not publicly reachable (no security group change needed, same as the "don't expose 3000/6333/5432"
+rule above), but a tunnel from your laptop can reach it:
+
+```bash
+ssh -L 3000:localhost:3000 ubuntu@<elastic-ip>
+```
+
+Then browse `http://localhost:3000` on your laptop. Login: `admin@localhost.local` /
+`<LANGFUSE_ADMIN_PASSWORD from .env>`.
+
+This works for one operator at a time without any new public exposure. For team-wide access without a
+manual tunnel per session, see the mesh VPN entry under **Future Enhancements**.
+
+#### SQL access (no login needed)
 
 **Recent traces** (question asked + answer returned):
 ```bash
@@ -581,8 +598,9 @@ docker compose exec postgres psql -U langfuse -d langfuse -c "select trace_id, n
 docker compose exec postgres psql -U langfuse -d langfuse -c "select count(*) as generations, sum(total_tokens) as total_tokens, round(sum(calculated_total_cost)::numeric, 4) as total_cost_usd from observations where type = 'GENERATION' and start_time > now() - interval '24 hours';"
 ```
 
-All four verified against a real seeded Langfuse instance before writing this up. Full UI access
-(browsing traces visually instead of via SQL) is tracked separately — see issue #41.
+All four verified against a real seeded Langfuse instance before writing this up. UI access is now
+available via SSH tunnel (above); a mesh VPN for tunnel-free team-wide access is documented as a future
+enhancement below.
 
 ---
 
@@ -602,3 +620,18 @@ All four verified against a real seeded Langfuse instance before writing this up
 **Workaround:** Run a full re-index (`POST /ingest/full`) after bulk PO edits, or wait for the next `on_cancel`/re-submission event.
 
 **When to revisit:** If a future Frappe release resolves this, add the `po-on-update-submitted` webhook back (it is already handled by the event-agnostic webhook handler) and reinstate the E2E integration test in `tests/test_integration.py`.
+
+### Mesh VPN (Tailscale) for team-wide Langfuse/Qdrant access
+
+**Status:** Not implemented — SSH tunnel (see §12) covers the immediate need.
+
+**Problem:** SSH tunneling works for a single operator but doesn't scale to a team — everyone needs SSH
+key access to the box and has to re-run `ssh -L` every session.
+
+**Approach (future):** Install Tailscale on the EC2 host and join it to a tailnet; each teammate installs
+Tailscale on their own device and joins the same tailnet. Once joined, Langfuse (and Qdrant, if useful) can
+be reached directly at the host's Tailscale IP without any port-forwarding step, while port 3000/6333
+remain closed to the public internet — only devices authenticated to the tailnet can reach them.
+
+**When to revisit:** When more than one or two people regularly need Langfuse/Qdrant access, or SSH-key
+management for tunneling becomes a bottleneck.
