@@ -37,6 +37,7 @@ session start and deleted on teardown — the production collection is untouched
 
 from __future__ import annotations
 
+import contextlib
 import os
 from datetime import UTC, datetime, timedelta
 
@@ -824,7 +825,11 @@ def _erp_create_and_submit_po(erpnext_url: str, erp_headers: dict) -> tuple[str,
     ).json().get("data", [{}])[0].get("name")
     item_code = httpx.get(
         f"{erpnext_url}/api/resource/Item",
-        params={"limit_page_length": 1, "fields": '["name"]', "filters": '[["is_purchase_item","=","1"]]'},
+        params={
+            "limit_page_length": 1,
+            "fields": '["name"]',
+            "filters": '[["is_purchase_item","=","1"]]',
+        },
         headers=erp_headers, timeout=10,
     ).json().get("data", [{}])[0].get("name")
 
@@ -859,14 +864,12 @@ def _erp_create_and_submit_po(erpnext_url: str, erp_headers: dict) -> tuple[str,
 def _erp_cancel_po(erpnext_url: str, erp_headers: dict, docname: str) -> None:
     """Cancel a submitted PO; silently ignore errors (safe to call in finally)."""
     import httpx
-    try:
+    with contextlib.suppress(Exception):
         httpx.post(
             f"{erpnext_url}/api/method/frappe.client.cancel",
             data={"doctype": "Purchase Order", "name": docname},
             headers=erp_headers, timeout=10,
         )
-    except Exception:
-        pass
 
 
 def _poll_qdrant(docname: str, *, predicate, timeout: int = 60) -> list[dict]:
@@ -921,7 +924,11 @@ def test_erpnext_po_submit_fires_webhook_and_lands_in_qdrant(api_http) -> None:
     ).json().get("data", [{}])[0].get("name")
     item_code = httpx.get(
         f"{erpnext_url}/api/resource/Item",
-        params={"limit_page_length": 1, "fields": '["name"]', "filters": '[["is_purchase_item","=","1"]]'},
+        params={
+            "limit_page_length": 1,
+            "fields": '["name"]',
+            "filters": '[["is_purchase_item","=","1"]]',
+        },
         headers=erp_headers, timeout=10,
     ).json().get("data", [{}])[0].get("name")
 
@@ -984,14 +991,12 @@ def test_erpnext_po_submit_fires_webhook_and_lands_in_qdrant(api_http) -> None:
 
     finally:
         # Cancel the test PO so it doesn't pollute active data; ignore errors
-        try:
+        with contextlib.suppress(Exception):
             httpx.post(
                 f"{erpnext_url}/api/method/frappe.client.cancel",
                 json={"doctype": "Purchase Order", "name": docname},
                 headers=erp_headers, timeout=10,
             )
-        except Exception:
-            pass
 
 
 @live
@@ -1003,7 +1008,8 @@ def test_erpnext_po_cancel_fires_webhook_and_updates_qdrant(api_http) -> None:
     ERPNext fires on_cancel asynchronously via background workers; the test
     polls Qdrant for up to 60 s before failing.
 
-    RUN_INTEGRATION=1 pytest tests/test_integration.py::test_erpnext_po_cancel_fires_webhook_and_updates_qdrant -v
+    RUN_INTEGRATION=1 pytest \
+        tests/test_integration.py::test_erpnext_po_cancel_fires_webhook_and_updates_qdrant -v
     """
     import httpx
 
@@ -1036,7 +1042,8 @@ def test_erpnext_po_cancel_fires_webhook_and_updates_qdrant(api_http) -> None:
         )
 
         assert points, (
-            f"{docname} disappeared from Qdrant after cancel — expected re-index with status='Cancelled'.\n"
+            f"{docname} disappeared from Qdrant after cancel — "
+            "expected re-index with status='Cancelled'.\n"
             "Check: po-on-cancel webhook configured? enable_security=1?"
         )
         statuses = [p["payload"].get("status") for p in points]
@@ -1646,7 +1653,11 @@ def _g9_qdrant_points_for_docname(docname: str, collection: str) -> list[dict]:
 
     r = httpx.post(
         f"{_G9_QDRANT_URL}/collections/{collection}/points/scroll",
-        json={"filter": {"must": [{"key": "docname", "match": {"value": docname}}]}, "limit": 50, "with_payload": True},
+        json={
+            "filter": {"must": [{"key": "docname", "match": {"value": docname}}]},
+            "limit": 50,
+            "with_payload": True,
+        },
         timeout=5,
     )
     r.raise_for_status()
