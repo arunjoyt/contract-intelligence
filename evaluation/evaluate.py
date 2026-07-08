@@ -17,6 +17,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -51,11 +52,85 @@ Context:
 
 
 # ---------------------------------------------------------------------------
+# Ground-truth seeding — makes evaluate.py self-contained when the Qdrant
+# collection is empty (e.g. the CI service container, which starts fresh
+# every run and has no live ERPNext to ingest from).
+# ---------------------------------------------------------------------------
+
+_DOCNAME_RE = re.compile(r"\b([A-Z]{2,10}-\d{3,})\b")
+_SUPPLIER_RE = re.compile(r"^Supplier ([^:]+):")
+
+
+def _extract_docname(text: str, fallback_index: int) -> str:
+    """Best-effort docname extraction from a ground-truth context string."""
+    match = _DOCNAME_RE.search(text)
+    if match:
+        return match.group(1)
+    match = _SUPPLIER_RE.match(text)
+    if match:
+        slug = re.sub(r"[^A-Za-z0-9]+", "-", match.group(1)).strip("-").lower()
+        return f"supplier-{slug}"
+    return f"eval-doc-{fallback_index}"
+
+
+def _seed_from_ground_truth(entries: list[dict], embedder, vector_store) -> None:
+    """Upsert every distinct ``ground_truth_contexts`` string into Qdrant.
+
+    Contexts are grouped by their extracted docname so repeated chunks of the
+    same source document (e.g. multiple CON-00001 clauses) get distinct
+    ``chunk_index`` values instead of colliding on the same deterministic
+    point ID.
+    """
+    texts: list[str] = []
+    seen: set[str] = set()
+    for entry in entries:
+        for text in entry.get("ground_truth_contexts", []):
+            if text not in seen:
+                seen.add(text)
+                texts.append(text)
+
+    if not texts:
+        return
+
+    by_docname: dict[str, list[str]] = {}
+    for i, text in enumerate(texts):
+        by_docname.setdefault(_extract_docname(text, i), []).append(text)
+
+    flat_texts: list[str] = []
+    chunk_meta: list[tuple[str, int, int]] = []
+    for docname, group in by_docname.items():
+        total = len(group)
+        for chunk_index, text in enumerate(group):
+            flat_texts.append(text)
+            chunk_meta.append((docname, chunk_index, total))
+
+    vectors = embedder.embed_texts(flat_texts)
+    chunks = [
+        {
+            "vector": vector,
+            "docname": docname,
+            "chunk_index": chunk_index,
+            "total_chunks": total_chunks,
+            "text": text,
+        }
+        for text, vector, (docname, chunk_index, total_chunks) in zip(
+            flat_texts, vectors, chunk_meta, strict=True
+        )
+    ]
+    vector_store.upsert_chunks(chunks)
+    logger.info(
+        "Seeded %d ground-truth chunk(s) across %d synthetic docname(s) into Qdrant",
+        len(chunks),
+        len(by_docname),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Component bootstrap
 # ---------------------------------------------------------------------------
 
 
-def _build_components():
+def _build_components(entries: list[dict]):
     from ingestion.embedder import Embedder
     from pipeline.query_rewriter import QueryRewriter
     from retrieval.hybrid_search import HybridSearch
@@ -68,8 +143,14 @@ def _build_components():
     vector_store = VectorStore()
     vector_store.ensure_collection()
 
+    existing_texts = vector_store.get_all_texts()
+    if not existing_texts:
+        logger.info("Qdrant collection is empty — seeding ground-truth contexts")
+        _seed_from_ground_truth(entries, embedder, vector_store)
+        existing_texts = vector_store.get_all_texts()
+
     hybrid_search = HybridSearch(embedder=embedder, vector_store=vector_store)
-    hybrid_search.build_bm25_index(vector_store.get_all_texts())
+    hybrid_search.build_bm25_index(existing_texts)
 
     reranker = Reranker()
     reranker.warm_up()
@@ -142,7 +223,7 @@ def evaluate(dataset_path: Path, output_path: Path) -> None:
     entries: list[dict] = json.loads(dataset_path.read_text())
     logger.info("Loaded %d entries from %s", len(entries), dataset_path)
 
-    rewriter, hybrid_search, reranker = _build_components()
+    rewriter, hybrid_search, reranker = _build_components(entries)
     openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
     samples: list[SingleTurnSample] = []
@@ -162,9 +243,10 @@ def evaluate(dataset_path: Path, output_path: Path) -> None:
             logger.exception("Pipeline failed for question %d — skipping", i)
             continue
 
-        # Fall back to reference_contexts when the vector store returns nothing
-        # (e.g. first run before any ingest).  Faithfulness will still be useful
-        # because it checks whether the answer stays within the provided context.
+        # Safety net only — with ground-truth seeding in _build_components(),
+        # retrieval should never come back empty. If it does, fall back to
+        # reference_contexts so context_recall/context_precision still compute,
+        # though faithfulness/answer_relevancy reflect the real (broken) retrieval.
         if not retrieved_contexts:
             logger.warning("No retrieved contexts for question %d — using ground truth", i)
             retrieved_contexts = reference_contexts
