@@ -169,6 +169,15 @@ The Langfuse UI is accessible at `http://localhost:3000` (default docker-compose
    - Root trace `output.answer` is non-empty and contains at least one `[docname]`-style citation
    - On a forced error, `level` is `ERROR` on the failing span and propagates to the root trace
 
+### Future Enhancements — production quality monitoring (not implemented)
+
+Tracing tells you a query ran and how long it took; it says nothing about whether the answer was any good. RAGAS (`evaluation/evaluate.py`) only scores a fixed golden dataset in CI, so quality drift on real production questions currently goes undetected. Two independent options, not mutually exclusive:
+
+1. **User feedback** — add thumbs up/down to the Streamlit chat UI (`frontend/app.py`), and on click call `Langfuse.score(trace_id=..., name="user_feedback", value=1|0)` against the trace ID of that query. Cheap to build; signal is real but low-volume (depends on users bothering to click).
+2. **LLM-as-judge sampling** — a periodic job (e.g. nightly, similar cadence to the deferred RAGAS-nightly idea above) pulls a sample of recent production traces from Langfuse via its API, runs an LLM judge over each `{question, answer, sources}` triple for faithfulness/relevancy, and writes the result back as a Langfuse score. Closer to RAGAS's signal, works without user participation, but costs an extra LLM call per sampled trace and needs a judge prompt/rubric.
+
+See issue tracking this in the GitHub roadmap (#17, Future Enhancements).
+
 ## Security Notes
 
 - ERPNext API key/secret never leaves the server — the webhook handler only exposes an HMAC-protected endpoint
