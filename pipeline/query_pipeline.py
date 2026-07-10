@@ -113,12 +113,14 @@ class QueryPipeline:
                 trace,
                 "hybrid_search",
                 lambda: self._hybrid_search.search(rewritten, merged, top_k=20),
+                summarize=_docnames,
             )
 
             top_chunks = self._span(
                 trace,
                 "rerank",
                 lambda: self._reranker.rerank(question, candidates, top_n=5),
+                summarize=_docnames,
             )
 
             context = _build_context(top_chunks)
@@ -157,14 +159,19 @@ class QueryPipeline:
         return response.choices[0].message.content or ""
 
     @staticmethod
-    def _span(trace: Any, name: str, fn):
-        """Execute ``fn`` inside a Langfuse span if tracing is active."""
+    def _span(trace: Any, name: str, fn, summarize=None):
+        """Execute ``fn`` inside a Langfuse span if tracing is active.
+
+        ``summarize``, if given, converts the result into a small span output
+        (e.g. docnames only) instead of dumping the full result -- avoids
+        duplicating chunk text/embeddings into Langfuse's trace storage.
+        """
         if trace is None:
             return fn()
         span = trace.span(name=name)
         try:
             result = fn()
-            span.end()
+            span.end(output=summarize(result) if summarize else None)
             return result
         except Exception:
             span.end(level="ERROR")
@@ -191,6 +198,12 @@ def _extract_filters(question: str) -> dict[str, Any]:
             break
 
     return filters
+
+
+def _docnames(chunks: list[dict]) -> list[str]:
+    """Docnames only, in rank order -- enough to sanity-check retrieval without
+    duplicating chunk text into Langfuse's trace storage."""
+    return [c.get("docname", "") for c in chunks]
 
 
 def _build_context(chunks: list[dict]) -> str:
