@@ -12,6 +12,44 @@ Query your procurement data in plain English:
 - "What is the approved price ceiling for office supplies from Vendor X?"
 - "Summarize all penalty clauses across active contracts."
 
+## Architecture
+
+```mermaid
+flowchart LR
+    ERP[ERPNext]
+
+    subgraph ING[Ingestion]
+        direction TB
+        PARSE[parse] --> CHUNK[chunk] --> EMBED[embed]
+    end
+
+    QD[(Qdrant)]
+
+    subgraph RET[Retrieval]
+        direction TB
+        BM25[BM25] & VEC[vector search] --> RRF[RRF fusion] --> RERANK[cross-encoder rerank]
+    end
+
+    subgraph PIPE[Pipeline]
+        direction TB
+        REWRITE[HyDE / step-back rewrite] --> GEN[GPT-4o generate + cite]
+    end
+
+    API[[FastAPI /query]]
+    UI[Streamlit]
+    LF{{Langfuse}}
+
+    ERP -- "REST + webhooks" --> ING
+    ING -- "idempotent upsert" --> QD
+    QD --> RET
+    RET -- "top-5 chunks" --> PIPE
+    PIPE --> API
+    API --> UI
+    PIPE -. "trace" .-> LF
+```
+
+See `docs/ARCHITECTURE.md` for the full data-flow and schema breakdown.
+
 ## Tech Stack
 
 | Layer | Technology |

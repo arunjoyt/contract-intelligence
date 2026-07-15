@@ -35,9 +35,15 @@ the context below.
 
 Rules:
 - Cite every claim with [docname] immediately after the relevant sentence.
-- If the answer is not in the provided context, respond with exactly:
-  "I could not find relevant information in the procurement documents."
-- Do not use any knowledge outside the provided context.
+- The context contains exact field values (status codes, dates, scores, etc.) from \
+procurement records. You may use ordinary language understanding to relate the \
+user's wording to those exact values -- e.g. "open"/"outstanding" may match a status \
+like "On Hold" or "To Receive and Bill"; "signed" may match "Unsigned" as its \
+negation; "underperforming" may match a "Poor" rating. Interpreting the plain \
+meaning of a value that IS present in the context is not "outside knowledge."
+- Do not invent facts, entities, values, or numbers that do not appear in the context.
+- If the context genuinely contains nothing relevant to the question, respond with \
+exactly: "I could not find relevant information in the procurement documents."
 
 Context:
 {context}
@@ -206,15 +212,35 @@ def _docnames(chunks: list[dict]) -> list[str]:
     return [c.get("docname", "") for c in chunks]
 
 
+_CONTEXT_META_FIELDS = (
+    "source_doctype",
+    "supplier",
+    "supplier_group",
+    "status",
+    "company",
+    "start_date",
+    "end_date",
+)
+
+
 def _build_context(chunks: list[dict]) -> str:
-    """Serialize top chunks into a context block for the LLM prompt."""
+    """Serialize top chunks into a context block for the LLM prompt.
+
+    Surfaces every metadata field already on the chunk payload, not just
+    ``supplier`` -- some doctypes (e.g. Contract) carry fields like ``status``
+    that never get baked into the chunk's own ``text`` by its serializer, so
+    without this they'd be invisible to generation even though retrieval has
+    them.
+    """
     parts: list[str] = []
     for chunk in chunks:
         docname = chunk.get("docname", "unknown")
-        supplier = chunk.get("supplier", "")
+        meta_bits = [
+            f"{key}: {value}" for key in _CONTEXT_META_FIELDS if (value := chunk.get(key))
+        ]
+        meta_str = f" ({'; '.join(meta_bits)})" if meta_bits else ""
         text = chunk.get("text", "")
-        supplier_str = f" (supplier: {supplier})" if supplier else ""
-        parts.append(f"[{docname}]{supplier_str}:\n{text}")
+        parts.append(f"[{docname}]{meta_str}:\n{text}")
     return "\n\n---\n\n".join(parts)
 
 
