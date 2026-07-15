@@ -1685,6 +1685,32 @@ def _g9_first_erpnext_doc(doctype: str) -> str | None:
     return docs[0]["name"] if docs else None
 
 
+def _g9_first_doc_with_pdf_attachment(doctype: str) -> str | None:
+    """Return the name of the first `doctype` doc with a `.pdf` File attached, or None."""
+    import httpx
+
+    erpnext_url = os.getenv("ERPNEXT_URL", "")
+    api_key = os.getenv("ERPNEXT_API_KEY", "")
+    api_secret = os.getenv("ERPNEXT_API_SECRET", "")
+    if not all([erpnext_url, api_key, api_secret]):
+        return None
+    r = httpx.get(
+        f"{erpnext_url}/api/resource/File",
+        params={
+            "limit_page_length": 0,
+            "fields": '["attached_to_name","file_name"]',
+            "filters": f'[["attached_to_doctype","=","{doctype}"]]',
+        },
+        headers={"Authorization": f"token {api_key}:{api_secret}"},
+        timeout=10,
+    )
+    r.raise_for_status()
+    for f in r.json().get("data", []):
+        if (f.get("file_name") or "").lower().endswith(".pdf"):
+            return f.get("attached_to_name")
+    return None
+
+
 @pytest.fixture(scope="module")
 def webhook_http_client(embedder, vs):
     """TestClient wired with real ERPNextClient, Embedder, and VectorStore (test collection).
@@ -1833,3 +1859,56 @@ def test_webhook_contract_lands_in_qdrant(webhook_http_client, vs) -> None:
         points = _g9_qdrant_points_for_docname(docname, vs._collection)
         assert len(points) > 0, f"{docname} not found in Qdrant after webhook"
         assert points[0]["payload"]["source_doctype"] == "Contract"
+
+
+@live
+@pytest.mark.webhook
+def test_webhook_purchase_invoice_lands_in_qdrant(webhook_http_client, vs) -> None:
+    """Signed Purchase Invoice webhook → handler fetches doc from ERPNext → point
+    appears in test Qdrant (issue #52 — Purchase Invoice was never wired up)."""
+    docname = _g9_first_erpnext_doc("Purchase Invoice")
+    if not docname:
+        pytest.skip("No submitted Purchase Invoices on ERPNext site")
+
+    vs.delete_by_docname(docname)
+
+    r = _g9_post_webhook(webhook_http_client, "Purchase Invoice", docname)
+    assert r.status_code == 200, f"Webhook returned {r.status_code}: {r.text}"
+    assert r.json() == {"status": "indexed", "docname": docname}
+
+    points = _g9_qdrant_points_for_docname(docname, vs._collection)
+    assert len(points) > 0, f"{docname} not found in Qdrant after webhook"
+    assert points[0]["payload"]["source_doctype"] == "Purchase Invoice"
+
+
+@live
+@pytest.mark.webhook
+def test_webhook_doc_with_pdf_attachment_indexes_extra_chunks(webhook_http_client, vs) -> None:
+    """A Purchase Order/Contract with an attached PDF gets extra chunks from the
+    attachment's extracted text on top of its own serialized/HTML text — proves the
+    real ERPNext File download + pypdf extraction path works end-to-end (issue #52),
+    not just the mocked version in test_webhook_handler.py."""
+    docname = None
+    doctype = None
+    for candidate_doctype in ("Purchase Order", "Contract"):
+        docname = _g9_first_doc_with_pdf_attachment(candidate_doctype)
+        if docname:
+            doctype = candidate_doctype
+            break
+    if not docname:
+        pytest.skip("No Purchase Order or Contract with a PDF attachment on ERPNext site")
+
+    vs.delete_by_docname(docname)
+
+    r = _g9_post_webhook(webhook_http_client, doctype, docname)
+    assert r.status_code == 200, f"Webhook returned {r.status_code}: {r.text}"
+    assert r.json()["status"] == "indexed"
+
+    points = _g9_qdrant_points_for_docname(docname, vs._collection)
+    assert len(points) > 1, (
+        f"Expected >1 chunk for {docname} (own text + PDF attachment), got {len(points)}"
+    )
+    total_chunks_values = {p["payload"]["total_chunks"] for p in points}
+    assert total_chunks_values == {len(points)}, (
+        f"total_chunks payload should match the combined chunk count: {total_chunks_values}"
+    )

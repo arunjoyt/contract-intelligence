@@ -62,6 +62,40 @@ async def test_get_file_content_returns_bytes(client: ERPNextClient) -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_get_attached_files_returns_data(client: ERPNextClient) -> None:
+    route = respx.get(f"{BASE_URL}/api/resource/File").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "name": "FILE-001",
+                        "file_url": "/private/files/contract.pdf",
+                        "file_name": "contract.pdf",
+                    }
+                ]
+            },
+        )
+    )
+
+    result = await client.get_attached_files("Contract", "CON-001")
+
+    assert result == [
+        {
+            "name": "FILE-001",
+            "file_url": "/private/files/contract.pdf",
+            "file_name": "contract.pdf",
+        }
+    ]
+    assert route.called
+    request = route.calls.last.request
+    filters = request.url.params["filters"]
+    assert '"attached_to_doctype", "=", "Contract"' in filters or "attached_to_doctype" in filters
+    assert "CON-001" in filters
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_get_doc_raises_not_found_on_404(client: ERPNextClient) -> None:
     respx.get(f"{BASE_URL}/api/resource/Contract/CON-9999").mock(
         return_value=httpx.Response(404, json={"exc_type": "DoesNotExistError"})

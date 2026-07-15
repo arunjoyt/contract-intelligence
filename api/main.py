@@ -27,10 +27,14 @@ from pydantic import BaseModel
 
 from api.auth.dependencies import require_allowed_role
 from api.routers.auth import router as auth_router
-from ingestion.chunker import chunk_text
 from ingestion.embedder import Embedder
 from ingestion.erpnext_client import ERPNextClient
-from ingestion.webhook_handler import handle_webhook_request, prepare_doc_for_indexing
+from ingestion.webhook_handler import (
+    gather_chunks_for_doc,
+    handle_webhook_request,
+    prepare_doc_for_indexing,
+    resolve_supplier_group,
+)
 from pipeline.query_pipeline import QueryPipeline
 from pipeline.query_rewriter import QueryRewriter
 from retrieval.hybrid_search import HybridSearch
@@ -43,7 +47,13 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 
 logger = logging.getLogger(__name__)
 
-_INGEST_DOCTYPES = ("Purchase Order", "Contract", "Supplier Scorecard")
+_INGEST_DOCTYPES = (
+    "Purchase Order",
+    "Purchase Invoice",
+    "Contract",
+    "Terms and Conditions",
+    "Supplier Scorecard",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -197,22 +207,15 @@ async def _run_full_ingest(
                 name: str = entry["name"]
                 try:
                     doc = await client.get_doc(doctype, name)
-                    supplier_name = doc.get("supplier") or doc.get("party_name")
-                    supplier_group: str | None = None
-                    if supplier_name:
-                        try:
-                            supplier = await client.get_doc("Supplier", supplier_name)
-                            supplier_group = supplier.get("supplier_group")
-                        except Exception:
-                            pass
+                    supplier_group = await resolve_supplier_group(doctype, doc, client)
 
                     text, metadata, force_single = prepare_doc_for_indexing(
                         doctype, doc, supplier_group
                     )
-                    if not text.strip():
+                    chunks = await gather_chunks_for_doc(doctype, doc, text, force_single, client)
+                    if not chunks:
                         continue
 
-                    chunks = chunk_text(text, force_single_chunk=force_single)
                     vectors = embedder.embed_texts([c["text"] for c in chunks])
                     enriched = [
                         {**chunk, **metadata, "vector": vector}
