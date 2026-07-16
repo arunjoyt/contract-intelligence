@@ -58,6 +58,19 @@ ERPNext
 5. **Generation** — GPT-4o receives the top-5 chunks as context with a structured prompt that requires source citations.
 6. **Tracing** — each step is a Langfuse child span; the full trace is linked to the question.
 
+### Known Limitations — aggregation/enumeration queries
+
+This pipeline is scoped to passage-grounded Q&A: retrieval is always top-20 hybrid search reranked to
+a fixed top-5 before generation. It does **not** reliably compute exact sums, counts, or full
+enumerations over many matching records (e.g. "total PO amount to supplier X this month," "list all
+open POs for supplier Y") — any entity with more matching records than the top-5 budget will have some
+silently dropped before the LLM ever sees them, since the reranker optimizes for "best passage(s) for
+one question," not "every record matching a filter." Supporting that query class reliably would
+require a second, parallel retrieval path (an exact metadata-filtered fetch, e.g. Qdrant `scroll` by
+`supplier`/`source_doctype`, bypassing top-k semantic rerank entirely) plus aggregation-aware
+generation — a different architecture, not a tuning fix. See #45 for the original investigation and
+root-cause analysis; closed as out of scope.
+
 ## Document Indexing Strategy
 
 ### Structured documents (PO, Invoice, Scorecard)
