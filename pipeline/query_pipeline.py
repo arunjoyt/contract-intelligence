@@ -220,6 +220,8 @@ _CONTEXT_META_FIELDS = (
     "company",
     "start_date",
     "end_date",
+    "linked_doctype",
+    "linked_docname",
 )
 
 
