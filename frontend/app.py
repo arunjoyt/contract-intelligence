@@ -17,7 +17,13 @@ load_dotenv()
 
 BACKEND_URL = os.environ["BACKEND_URL"]
 _MAX_HISTORY = 10
-_DOCTYPES = ["Purchase Order", "Purchase Invoice", "Contract", "Supplier Scorecard"]
+_DOCTYPES = [
+    "Purchase Order",
+    "Purchase Invoice",
+    "Contract",
+    "Terms and Conditions",
+    "Supplier Scorecard",
+]
 
 # Must run before any other st call so ?token= is captured on the redirect back.
 handle_token_from_url()

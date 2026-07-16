@@ -299,15 +299,18 @@ Create the following Webhook records in ERPNext desk (or via the REST API). For 
   The handler reads `docname` directly from the JSON body, so this maps straight through with
   no extra field-mapping step needed.
 
-| Webhook Name              | Doctype           | Event       | Why                                              |
-|---------------------------|-------------------|-------------|--------------------------------------------------|
-| `po-on-submit`            | Purchase Order    | `on_submit` | Index POs when first submitted                   |
-| `po-on-cancel`            | Purchase Order    | `on_cancel` | Re-index with status=Cancelled when PO cancelled |
-| `contract-on-submit`      | Contract          | `on_submit` | Index contracts when submitted                   |
-| `contract-on-update`      | Contract          | `on_update` | Re-index contracts saved/modified                |
-| `scorecard-on-update`     | Supplier Scorecard| `on_update` | Scorecards are not submittable; update only      |
+| Webhook Name              | Doctype             | Event       | Why                                               |
+|---------------------------|---------------------|-------------|----------------------------------------------------|
+| `po-on-submit`            | Purchase Order      | `on_submit` | Index POs (and attached PDFs) when first submitted |
+| `po-on-cancel`            | Purchase Order      | `on_cancel` | Re-index with status=Cancelled when PO cancelled   |
+| `invoice-on-submit`       | Purchase Invoice    | `on_submit` | Index invoices when first submitted                |
+| `invoice-on-cancel`       | Purchase Invoice    | `on_cancel` | Re-index with status=Cancelled when invoice cancelled |
+| `contract-on-submit`      | Contract            | `on_submit` | Index contracts (and attached PDFs) when submitted |
+| `contract-on-update`      | Contract            | `on_update` | Re-index contracts saved/modified                  |
+| `terms-on-update`         | Terms and Conditions| `on_update` | Not submittable; update only                       |
+| `scorecard-on-update`     | Supplier Scorecard  | `on_update` | Scorecards are not submittable; update only        |
 
-> **Note:** `on_submit` is not valid for Supplier Scorecard — it is not a submittable doctype in ERPNext.
+> **Note:** `on_submit` is not valid for Supplier Scorecard or Terms and Conditions — neither is a submittable doctype in ERPNext.
 
 > **Note:** `on_update_after_submit` for Purchase Orders is **not configured**. Investigation confirmed that Frappe 15 does not reliably fire this event via REST API or desk UI saves. See [Future Enhancements](#future-enhancements) below.
 
@@ -322,11 +325,14 @@ SECRET = "<your WEBHOOK_SECRET>"
 URL = "http://127.0.0.1:8000/webhook/erpnext"
 
 WEBHOOKS = [
-    ("po-on-submit",       "Purchase Order",     "on_submit"),
-    ("po-on-cancel",       "Purchase Order",     "on_cancel"),
-    ("contract-on-submit", "Contract",           "on_submit"),
-    ("contract-on-update", "Contract",           "on_update"),
-    ("scorecard-on-update","Supplier Scorecard", "on_update"),
+    ("po-on-submit",       "Purchase Order",      "on_submit"),
+    ("po-on-cancel",       "Purchase Order",      "on_cancel"),
+    ("invoice-on-submit",  "Purchase Invoice",    "on_submit"),
+    ("invoice-on-cancel",  "Purchase Invoice",    "on_cancel"),
+    ("contract-on-submit", "Contract",            "on_submit"),
+    ("contract-on-update", "Contract",            "on_update"),
+    ("terms-on-update",    "Terms and Conditions","on_update"),
+    ("scorecard-on-update","Supplier Scorecard",  "on_update"),
 ]
 
 WEBHOOK_JSON = '{"doctype": "{{ doc.doctype }}", "docname": "{{ doc.name }}"}'
@@ -350,10 +356,12 @@ for wname, doctype, event in WEBHOOKS:
 
 The webhook handler (`ingestion/webhook_handler.py`) is event-agnostic: for any event it calls `vector_store.delete_by_docname(docname)` then re-indexes the full document. This means:
 
-- **New PO submitted** → `on_submit` fires → indexed fresh
+- **New PO submitted** → `on_submit` fires → indexed fresh, including any attached PDFs
 - **PO amended** → amendment creates a new PO (new `docname`) → `on_submit` fires again on the amendment
 - **PO cancelled** → `on_cancel` fires → re-indexed with status=Cancelled
-- **Contract updated** → `on_update` fires → re-indexed with latest content
+- **Invoice submitted/cancelled** → indexed/re-indexed the same way as POs (no attachment handling)
+- **Contract updated** → `on_update` fires → re-indexed with latest content, including any attached PDFs
+- **Terms and Conditions updated** → `on_update` fires → re-indexed
 - **Scorecard updated** → `on_update` fires → re-indexed
 
 > **Known gap:** edits to a submitted PO (e.g. changing delivery date or remarks) do not trigger re-indexing. Frappe 15 does not reliably fire `on_update_after_submit` via API or desk saves. The Qdrant vector for a live PO will reflect the state at submission time until the next `on_cancel` or a manual full re-index (`POST /ingest/full`). See [Future Enhancements](#future-enhancements).

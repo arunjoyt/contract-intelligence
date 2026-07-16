@@ -91,6 +91,19 @@ class ERPNextClient:
         self._raise_for_status(response, doctype=doctype, name=name)
         return response.json()["data"]
 
+    async def get_attached_files(self, doctype: str, docname: str) -> list[dict[str, Any]]:
+        """List `File` records attached to a given document.
+
+        Returns each file's `name`, `file_url`, and `file_name`; callers filter by
+        extension and fetch bytes via `get_file_content(file_url)`.
+        """
+        return await self.get_list(
+            "File",
+            filters=[["attached_to_doctype", "=", doctype], ["attached_to_name", "=", docname]],
+            fields=["name", "file_url", "file_name"],
+            limit=0,
+        )
+
     async def get_file_content(self, file_url: str) -> bytes:
         """Download raw bytes for a Frappe `File` record's `file_url`.
 

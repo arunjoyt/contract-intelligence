@@ -76,6 +76,18 @@ Items: Steel Pipes, Welding Rods. Payment terms: Net 30. Status: Submitted.
 - `RecursiveCharacterTextSplitter`: `chunk_size=512`, `chunk_overlap=64`
 - Each chunk stores `chunk_index` and `total_chunks` for reconstruction
 
+### PDF attachments
+
+`Purchase Order` and `Contract` documents may carry attached PDFs (e.g. signed contract scans,
+invoice PDFs). For these two doctypes, `erpnext_client.get_attached_files()` lists the document's
+`File` records, `.pdf`-named ones are downloaded via `get_file_content()`, and their text is
+extracted via `extract_text_from_pdf()`. The extracted text is chunked the same way as any other
+unstructured text and indexed as **additional points under the same `docname`** as the parent
+document — `chunk_index`/`total_chunks` are renumbered across the combined set (parent text +
+attachments) so `delete_by_docname` and reconstruction stay correct. A failure to list attachments
+or extract one PDF's text is logged and skipped; it never blocks indexing of the parent document or
+other attachments.
+
 ### Supplier Metadata Enrichment
 
 `supplier_group` (used in the payload schema and as a filter field) is **not** present on `Purchase
@@ -110,13 +122,16 @@ Point ID is derived as `uuid5(NAMESPACE_DNS, f"{docname}:{chunk_index}")` — de
 
 ERPNext fires webhooks on the following events:
 
-| Doctype            | Event       | Effect                                      |
-|--------------------|-------------|---------------------------------------------|
-| Purchase Order     | `on_submit` | Indexed fresh on submission                 |
-| Purchase Order     | `on_cancel` | Re-indexed with status=Cancelled            |
-| Contract           | `on_submit` | Indexed when contract is submitted          |
-| Contract           | `on_update` | Re-indexed on any desk save                 |
-| Supplier Scorecard | `on_update` | Re-indexed (scorecards are not submittable) |
+| Doctype             | Event       | Effect                                                  |
+|---------------------|-------------|----------------------------------------------------------|
+| Purchase Order      | `on_submit` | Indexed fresh on submission (incl. attached PDFs)       |
+| Purchase Order      | `on_cancel` | Re-indexed with status=Cancelled                        |
+| Purchase Invoice    | `on_submit` | Indexed fresh on submission                             |
+| Purchase Invoice    | `on_cancel` | Re-indexed with status=Cancelled                        |
+| Contract            | `on_submit` | Indexed when contract is submitted (incl. attached PDFs)|
+| Contract            | `on_update` | Re-indexed on any desk save (incl. attached PDFs)       |
+| Terms and Conditions| `on_update` | Re-indexed (not a submittable doctype)                  |
+| Supplier Scorecard  | `on_update` | Re-indexed (scorecards are not submittable)             |
 
 > **Known gap:** `on_update_after_submit` for Purchase Orders is not supported. Frappe 15 does not fire this webhook event via API or desk UI saves, so edits to a submitted PO (e.g. delivery date, remarks) are not automatically re-indexed. Workaround: `POST /ingest/full`. See `docs/DEPLOYMENT.md` § Future Enhancements.
 
