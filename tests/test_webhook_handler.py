@@ -248,6 +248,49 @@ def test_contract_html_is_stripped_before_embedding(
     assert any("delivery within 30 days" in t for t in texts)
 
 
+def test_contract_linked_document_captured_in_metadata_and_text(
+    http_client: TestClient,
+    mock_erpnext: AsyncMock,
+    mock_vector_store: MagicMock,
+    mock_embedder: MagicMock,
+) -> None:
+    linked_contract = {
+        **CONTRACT_DOC,
+        "document_type": "Purchase Order",
+        "document_name": "PO-2024-00123",
+    }
+    mock_erpnext.get_doc.side_effect = [linked_contract, CONTRACT_SUPPLIER_DOC]
+
+    response = _post(http_client, {"doctype": "Contract", "docname": "CON-001"})
+
+    assert response.status_code == 200
+
+    chunks = mock_vector_store.upsert_chunks.call_args[0][0]
+    c = chunks[0]
+    assert c["linked_doctype"] == "Purchase Order"
+    assert c["linked_docname"] == "PO-2024-00123"
+
+    texts = mock_embedder.embed_texts.call_args[0][0]
+    assert any("Purchase Order PO-2024-00123" in t for t in texts)
+
+
+def test_contract_without_linked_document_has_null_metadata(
+    http_client: TestClient,
+    mock_erpnext: AsyncMock,
+    mock_vector_store: MagicMock,
+) -> None:
+    mock_erpnext.get_doc.side_effect = [CONTRACT_DOC, CONTRACT_SUPPLIER_DOC]
+
+    response = _post(http_client, {"doctype": "Contract", "docname": "CON-001"})
+
+    assert response.status_code == 200
+
+    chunks = mock_vector_store.upsert_chunks.call_args[0][0]
+    c = chunks[0]
+    assert c["linked_doctype"] is None
+    assert c["linked_docname"] is None
+
+
 def test_empty_contract_terms_returns_skipped(
     http_client: TestClient, mock_erpnext: AsyncMock, mock_vector_store: MagicMock
 ) -> None:

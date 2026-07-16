@@ -265,8 +265,14 @@ def prepare_doc_for_indexing(
         )
 
     if doctype == "Contract":
+        text = extract_text_from_html(doc.get("contract_terms"))
+        linked_doctype = doc.get("document_type")
+        linked_docname = doc.get("document_name")
+        if linked_doctype and linked_docname:
+            linked_sentence = f"This contract is linked to {linked_doctype} {linked_docname}."
+            text = f"{linked_sentence} {text}".strip()
         return (
-            extract_text_from_html(doc.get("contract_terms")),
+            text,
             {
                 "source_doctype": "Contract",
                 "docname": doc["name"],
@@ -276,6 +282,8 @@ def prepare_doc_for_indexing(
                 "end_date": doc.get("end_date"),
                 "status": doc.get("status"),
                 "company": doc.get("company"),
+                "linked_doctype": linked_doctype,
+                "linked_docname": linked_docname,
             },
             False,
         )

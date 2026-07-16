@@ -168,6 +168,19 @@ def test_build_context_empty_chunks_returns_empty_string() -> None:
     assert _build_context([]) == ""
 
 
+def test_build_context_includes_linked_document_when_present() -> None:
+    chunks = [
+        {
+            **_make_chunk("CON-001", source_doctype="Contract"),
+            "linked_doctype": "Purchase Order",
+            "linked_docname": "PO-2024-00123",
+        }
+    ]
+    context = _build_context(chunks)
+    assert "linked_doctype: Purchase Order" in context
+    assert "linked_docname: PO-2024-00123" in context
+
+
 # ---------------------------------------------------------------------------
 # _parse_sources
 # ---------------------------------------------------------------------------

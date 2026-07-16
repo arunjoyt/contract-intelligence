@@ -118,6 +118,12 @@ Order` records — it only exists on `Supplier` (and is, separately, already a d
 
 Point ID is derived as `uuid5(NAMESPACE_DNS, f"{docname}:{chunk_index}")` — deterministic, enabling idempotent upserts.
 
+`Contract` carries two additional, optional payload fields — `linked_doctype`/`linked_docname` — populated from
+the doctype's `document_type`/`document_name` Dynamic Link pair when the contract references a specific
+transaction document (e.g. a Purchase Order). A matching sentence ("This contract is linked to Purchase Order
+PO-2024-00123.") is also prepended to the embedded/chunked text so the link is retrievable via semantic/BM25
+search without requiring a metadata filter.
+
 ## Incremental Indexing via Webhooks
 
 ERPNext fires webhooks on the following events:
