@@ -223,6 +223,26 @@ See issue tracking this in the GitHub roadmap (#17, Future Enhancements).
 
 `POST /query` requires a valid JWT (`Authorization: Bearer <token>`). The JWT is minted by FastAPI after completing the ERPNext OAuth2 Authorization Code + PKCE flow. Role enforcement (`Purchase Manager`, `Purchase User`, `Accounts User`, `System Manager`) happens at the point where the access token is exchanged — unauthorized users receive `403`. JWT lifetime is controlled by `JWT_EXPIRY_HOURS` (default 8h). See `docs/DEPLOYMENT.md` § Option B for setup details.
 
+### Known Limitation — access control is role-level, not document-level
+
+Authorization is a single yes/no gate: does the authenticated user hold one of the four allowed
+roles. Once past that gate, every user sees the same answers and sources, drawn from the **entire**
+indexed corpus — the JWT's role claim is checked once at the API boundary (`api/auth/dependencies.py`)
+and never passed into `QueryPipeline.run()`, `HybridSearch.search()`, or `VectorStore`. There is no
+per-document, per-company, or per-department filtering: ingestion pulls every record of the five
+target doctypes into one shared Qdrant collection using a single, Administrator-level ERPNext API
+key (`ingestion/erpnext_client.py`), independent of whatever row-level User Permissions ERPNext
+itself enforces on those documents in the Desk UI.
+
+This is acceptable as long as the four allowed roles are already meant to see the same procurement
+data in ERPNext (i.e. ERPNext isn't using User Permissions to scope some of those roles to specific
+companies/departments today). It stops being acceptable the moment that assumption breaks — e.g. a
+new company or restricted department is onboarded into the same ERPNext instance and expects its
+data walled off from other users holding the same role. Enforcing that would require passing the
+authenticated user's identity/permissions through the query pipeline and into the Qdrant filter
+(`filter_conditions` in `retrieval/vector_store.py`), not just gating `/query` at the door. See #60
+for the decision record — accepted conditionally, reopen if the assumption above breaks.
+
 ## Testing Strategy
 
 Three layers. Each layer has a different scope and cost.
