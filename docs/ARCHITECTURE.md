@@ -241,7 +241,8 @@ new company or restricted department is onboarded into the same ERPNext instance
 data walled off from other users holding the same role. Enforcing that would require passing the
 authenticated user's identity/permissions through the query pipeline and into the Qdrant filter
 (`filter_conditions` in `retrieval/vector_store.py`), not just gating `/query` at the door. See #60
-for the decision record — accepted conditionally, reopen if the assumption above breaks.
+for the decision record — accepted conditionally, reopen if the assumption above breaks — and
+`docs/DOCUMENT_LEVEL_ACCESS_CONTROL.md` for the proposed solution.
 
 ## Testing Strategy
 
