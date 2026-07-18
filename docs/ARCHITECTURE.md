@@ -52,7 +52,7 @@ ERPNext
 ## Query Pipeline — Step by Step
 
 1. **Query rewriting** — HyDE generates a hypothetical answer; its embedding becomes the query vector. This improves recall for abstract questions.
-2. **Metadata filter extraction** — simple heuristics (and optionally a small LLM call) parse supplier names, date ranges, and doctype hints from the original question.
+2. **Metadata filter extraction** — pure keyword matching (`_extract_filters()` in `query_pipeline.py`) against doctype and status keyword lists in the original question. No LLM call and no date-range parsing — only `source_doctype` and `status` are ever set this way; date/supplier filters come solely from the frontend sidebar.
 3. **Hybrid search** — BM25 (lexical) and Qdrant vector search run in parallel. Results are fused with Reciprocal Rank Fusion (`k=60`), returning 20 candidates. **Important:** metadata filters (supplier, doctype, status) are applied only to the Qdrant vector-search path — BM25 has no metadata support and searches the full corpus. Caller filters therefore narrow vector results but do not guarantee that every result in the fused set matches the filter.
 4. **Cross-encoder reranking** — `ms-marco-MiniLM` scores all 20 `(query, chunk)` pairs and returns the top 5.
 5. **Generation** — GPT-4o receives the top-5 chunks as context with a structured prompt that requires source citations.
@@ -111,6 +111,9 @@ Either approach touches the OpenAI-response-shape mocking in `tests/test_query_r
 chains matching `.choices[0].message.content` / `.data[i].embedding`). Deferred — see #51; not
 prioritized since no provider swap is currently planned.
 
+For the concrete steps to switch provider with today's codebase as-is (no adapter layer), see
+`docs/MODEL_PROVIDER_SWAP.md`.
+
 ## Document Indexing Strategy
 
 ### Structured documents (PO, Invoice, Scorecard)
@@ -145,27 +148,31 @@ other attachments.
 
 `supplier_group` (used in the payload schema and as a filter field) is **not** present on `Purchase
 Order` records — it only exists on `Supplier` (and is, separately, already a direct field on
-`Purchase Invoice`). For `Purchase Order` and `Contract`, `erpnext_client.py` must fetch/cache
-`Supplier` records and join `supplier_group` onto the record before serialization in
-`document_parser.py`.
+`Purchase Invoice`). For `Purchase Order` and `Contract`, `ingestion/webhook_handler.py`'s
+`resolve_supplier_group()`/`_fetch_supplier_group()` fetch the `Supplier` record and join
+`supplier_group` onto the metadata dict built in `prepare_doc_for_indexing()` — this fetch is **not
+cached**; it hits ERPNext fresh on every call.
 
 ### Qdrant Payload Schema
+
+Payload is **flat** — every metadata field sits at the top level alongside `text`, not nested under
+a `metadata` key (`retrieval/vector_store.py`'s `upsert_chunks()` stores
+`{k: v for k, v in chunk.items() if k != "vector"}` directly as the point payload, so filter
+expressions can reference fields like `supplier` or `status` without a nested path):
 
 ```json
 {
   "text": "...",
-  "metadata": {
-    "source_doctype": "Contract",
-    "docname": "CON-2024-00042",
-    "supplier": "Supplier-XYZ",
-    "supplier_group": "Hardware",
-    "start_date": "2024-01-01",
-    "end_date": "2025-01-01",
-    "status": "Active",
-    "company": "My Company",
-    "chunk_index": 2,
-    "total_chunks": 8
-  }
+  "source_doctype": "Contract",
+  "docname": "CON-2024-00042",
+  "supplier": "Supplier-XYZ",
+  "supplier_group": "Hardware",
+  "start_date": "2024-01-01",
+  "end_date": "2025-01-01",
+  "status": "Active",
+  "company": "My Company",
+  "chunk_index": 2,
+  "total_chunks": 8
 }
 ```
 

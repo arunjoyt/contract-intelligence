@@ -34,19 +34,18 @@ When `WEBHOOK_SECRET` was not set, the HMAC was computed with an empty key, allo
 
 ## Accepted risks
 
-| Item | Rationale |
-|------|-----------|
-| `lf-pk-local` / `lf-sk-local` hardcoded in `docker-compose.yml` | Local dev keys only; production must override via `.env` |
+None currently.
 
 ## Resolved risks
 
 | Item | Resolution |
 |------|------------|
 | `/query` had no authentication | Resolved — Option B OAuth2 + JWT auth implemented (PR #32). `POST /query` now requires `Authorization: Bearer <jwt>`; users without allowed roles receive 403. |
+| `lf-pk-local` / `lf-sk-local` hardcoded in `docker-compose.yml` | Resolved — `docker-compose.yml` now reads `${LANGFUSE_PUBLIC_KEY}`/`${LANGFUSE_SECRET_KEY}` from `.env`; no literal key values remain in a tracked file. |
 
 ---
 
-## Areas checked
+## Areas checked (as of 2026-06-30 review)
 
 - Webhook HMAC verification
 - Admin endpoint (`/ingest/full`) secret check
@@ -56,3 +55,29 @@ When `WEBHOOK_SECRET` was not set, the HMAC was computed with an empty key, allo
 - Subprocess / eval / pickle / unsafe YAML usage
 - Hardcoded secrets in tracked files
 - JWT / session handling
+
+---
+
+## Changes since last full review (spot notes, not a re-review)
+
+The items below landed after 2026-06-30 and touch security-relevant surface, but have not been
+through the same systematic static-analysis pass as the findings above — noted here so they aren't
+silently missing from this document, not as a certification that they're clean.
+
+- **OAuth callback duplicate-request tolerance** (`api/routers/auth.py`'s `oauth_completed` cache,
+  commit `5884a48`) — caches a completed login's redirect (including the minted JWT) for 60s, keyed
+  by the OAuth `state` value, so a duplicate `/auth/callback` request (from ERPNext's confirmation
+  page double-firing its click handler) replays the same redirect instead of erroring on an
+  already-consumed `state`. Assessed as low risk: `state` is a single-use, short-lived (60s) random
+  token already transmitted through the user's own browser redirect chain — the cache doesn't create
+  a way to mint a *new* token, only to re-serve the same one within a narrow window to a request
+  presenting the same `state`.
+- **Docker network/topology hardening** (commit `34025bd`) and **loopback-only Qdrant/Langfuse
+  ports** (commits `0469871`/`2923f2e`) — Qdrant and Langfuse are now bound to `127.0.0.1` only
+  (reachable via SSH tunnel, never the public internet), which further mitigates F3's original
+  concern about the Langfuse port being reachable on all host interfaces.
+- **`restart: unless-stopped` on all services** (commit `be89ad6`) — availability/ops change, no
+  security implication identified.
+- **Nginx envsubst domain templating** (commit `de694ea`) — `FRONTEND_DOMAIN`/`API_DOMAIN` are
+  deployer-set `.env` values substituted into the nginx config at container start, not
+  user-controlled input; no injection surface identified.

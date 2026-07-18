@@ -56,10 +56,10 @@ See `docs/ARCHITECTURE.md` for the full data-flow and schema breakdown.
 |---|---|
 | ERP | ERPNext (Frappe REST API + Webhooks) |
 | Vector DB | Qdrant (self-hosted) |
-| Orchestration | LangChain |
-| Embeddings | `text-embedding-3-small` (OpenAI) |
+| Orchestration | Hand-rolled (`pipeline/query_pipeline.py`) — LangChain is a dependency but only used for `RecursiveCharacterTextSplitter` in `ingestion/chunker.py`, not for orchestration |
+| Embeddings | `EMBEDDING_MODEL` env var, default `text-embedding-3-small` (OpenAI) — see `config.py` |
 | Re-ranker | `cross-encoder/ms-marco-MiniLM-L-6-v2` |
-| LLM | GPT-4o |
+| LLM | `OPENAI_MODEL` env var, default `gpt-4o` — see `config.py` |
 | Evaluation | RAGAS |
 | Observability | Langfuse (self-hosted) |
 | API | FastAPI |
@@ -117,14 +117,20 @@ procurement-rag/
 │   ├── ARCHITECTURE.md         # System design and data flow
 │   ├── IMPLEMENTATION_PLAN.md  # Ordered implementation steps
 │   ├── DEPLOYMENT.md           # Auth options, infra topology, webhook setup
-│   └── SECURITY_REVIEW.md      # Security review findings and accepted risks
+│   ├── SECURITY_REVIEW.md      # Security review findings and accepted risks
+│   ├── DOCUMENT_LEVEL_ACCESS_CONTROL.md  # Proposed future doc-level access control (#60, not implemented)
+│   └── MODEL_PROVIDER_SWAP.md  # Developer steps to switch LLM/embedding provider (#51)
 ├── nginx/
-│   └── nginx.conf              # Reverse-proxy config (Option B production)
+│   ├── nginx.conf              # Base reverse-proxy config (Option B production)
+│   └── templates/
+│       └── procurement-rag.conf.template  # envsubst template for FRONTEND_DOMAIN/API_DOMAIN
 ├── .github/
 │   └── workflows/
 │       └── ci.yml              # Lint, test, evaluate
+├── config.py                   # Central model config — OPENAI_MODEL, EMBEDDING_MODEL env vars
 ├── docker-compose.yml          # Production: all services on rag_internal, nginx on 80/443
 ├── docker-compose.frontend.yml # Dev override: exposes service ports directly to host
+├── docker-compose.local-prod.yml  # Local override for testing the production nginx topology
 ├── Dockerfile
 ├── requirements.txt
 ├── pyproject.toml
@@ -201,6 +207,7 @@ See `.env.example` for the full list with generation instructions. Key groups:
 | URLs | `OAUTH_REDIRECT_URI`, `FRONTEND_URL`, `PUBLIC_API_URL` | OAuth callback and post-login redirect targets; must use public domains in production |
 | Admin | `ADMIN_SECRET` | Gate for `POST /ingest/full` |
 | Pipeline | `QUERY_REWRITE_STRATEGY` | `hyde` (default) or `step_back` |
+| Model config | `OPENAI_MODEL`, `EMBEDDING_MODEL` | Defaults `gpt-4o` / `text-embedding-3-small`; see `config.py`. Changing `EMBEDDING_MODEL` to a different-dimension model requires recreating the Qdrant collection and a full re-ingest. |
 
 ## Data Sources
 
