@@ -13,7 +13,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 ignore = []
 
 [tool.ruff.lint.isort]
-known-first-party = ["ingestion", "retrieval", "pipeline", "api", "evaluation"]
+known-first-party = ["config", "ingestion", "retrieval", "pipeline", "api", "evaluation"]
 
 [tool.mypy]
 python_version = "3.11"

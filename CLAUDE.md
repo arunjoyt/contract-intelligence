@@ -141,14 +141,16 @@ ERPNext --REST API (full ingest) / Webhooks (incremental)--> Ingestion --> Qdran
 - **Ingestion** (`ingestion/`): `erpnext_client.py` (async httpx wrapper around Frappe REST API) →
   `document_parser.py` (HTML stripping via BeautifulSoup, PDF extraction via pypdf, struct→NL serialization)
   → `chunker.py` (`RecursiveCharacterTextSplitter`, `chunk_size=512`/`chunk_overlap=64`) → `embedder.py`
-  (`text-embedding-3-small`, batched). `webhook_handler.py` is the incremental re-indexing entry point.
+  (`EMBEDDING_MODEL`, default `text-embedding-3-small`, batched). `webhook_handler.py` is the incremental
+  re-indexing entry point.
 - **Retrieval** (`retrieval/`): `vector_store.py` (Qdrant wrapper) + `hybrid_search.py` (BM25 in-memory
   index fused with Qdrant vector search via Reciprocal Rank Fusion, `k=60`) + `reranker.py`
   (`cross-encoder/ms-marco-MiniLM-L-6-v2`, lazy singleton, loaded once at startup).
 - **Pipeline** (`pipeline/`): `query_rewriter.py` (HyDE or step-back rewriting, controlled by
   `QUERY_REWRITE_STRATEGY`) → `query_pipeline.py` (orchestrates rewrite → metadata filter extraction →
-  hybrid search top-20 → rerank top-5 → GPT-4o generation with required source citations). Every step is a
-  Langfuse child span.
+  hybrid search top-20 → rerank top-5 → `OPENAI_MODEL` generation, default `gpt-4o`, with required source
+  citations). Every step is a Langfuse child span. `OPENAI_MODEL`/`EMBEDDING_MODEL` are centralized in
+  `config.py` (see `docs/ARCHITECTURE.md` § Model Configuration).
 - **API** (`api/main.py`): `POST /query`, `POST /webhook/erpnext`, `POST /ingest/full` (background task,
   `X-Admin-Secret`-gated), `GET /health`. Startup hook ensures the Qdrant collection exists, rebuilds the
   BM25 index from Qdrant, and warms the reranker.

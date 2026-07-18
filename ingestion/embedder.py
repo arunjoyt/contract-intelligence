@@ -1,8 +1,9 @@
 """OpenAI embedding wrapper for the ingestion pipeline.
 
-Model: `text-embedding-3-small` (1536 dims). `embed_texts` batches calls at OpenAI's
-documented limit of 2048 inputs per request, so callers can pass arbitrarily long
-lists of chunk texts without worrying about the API's batch ceiling.
+Model is set by EMBEDDING_MODEL (see config.py), default `text-embedding-3-small`.
+`embed_texts` batches calls at OpenAI's documented limit of 2048 inputs per
+request, so callers can pass arbitrarily long lists of chunk texts without
+worrying about the API's batch ceiling.
 """
 
 from __future__ import annotations
@@ -11,7 +12,8 @@ import os
 
 from openai import OpenAI
 
-EMBEDDING_MODEL = "text-embedding-3-small"
+from config import EMBEDDING_MODEL
+
 MAX_BATCH_SIZE = 2048
 
 

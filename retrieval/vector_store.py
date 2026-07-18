@@ -27,7 +27,9 @@ from qdrant_client.models import (
     VectorParams,
 )
 
-VECTOR_DIM = 1536  # text-embedding-3-small
+from config import embedding_dimension
+
+VECTOR_DIM = embedding_dimension()  # dimension of config.EMBEDDING_MODEL
 
 
 class VectorStore:

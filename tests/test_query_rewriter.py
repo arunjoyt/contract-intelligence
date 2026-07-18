@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from config import OPENAI_MODEL
 from pipeline.query_rewriter import (
     _HYDE_SYSTEM,
     _STEP_BACK_SYSTEM,
@@ -222,7 +223,7 @@ def test_step_back_falls_back_to_original_on_empty_response(
 # ---------------------------------------------------------------------------
 
 
-def test_rewrite_uses_gpt4o_model(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_rewrite_uses_configured_model(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     mock_client = MagicMock()
     mock_client.chat.completions.create.return_value = _make_openai_response("answer")
@@ -233,4 +234,4 @@ def test_rewrite_uses_gpt4o_model(monkeypatch: pytest.MonkeyPatch) -> None:
     r.rewrite("query")
 
     kwargs = mock_client.chat.completions.create.call_args[1]
-    assert kwargs["model"] == "gpt-4o"
+    assert kwargs["model"] == OPENAI_MODEL

@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from openai import OpenAI
 
+from config import OPENAI_MODEL
 from pipeline.query_rewriter import QueryRewriter
 from retrieval.hybrid_search import HybridSearch
 from retrieval.reranker import Reranker
@@ -154,7 +155,7 @@ class QueryPipeline:
 
     def _generate(self, question: str, context: str) -> str:
         response = self._client.chat.completions.create(
-            model="gpt-4o",
+            model=OPENAI_MODEL,
             messages=[
                 {"role": "system", "content": _ANSWER_SYSTEM.format(context=context)},
                 {"role": "user", "content": question},
