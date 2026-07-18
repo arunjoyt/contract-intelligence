@@ -137,7 +137,14 @@ OAuth2 is built into Frappe — no custom app needed:
 3. User logs in on the ERPNext site — the RAG app never sees the password
 4. ERPNext redirects back to `https://api.procurement-rag.example.com/auth/callback?code=...`
 5. FastAPI exchanges the code for an access token via `POST {ERPNEXT_URL}/api/method/frappe.integrations.oauth2.get_token`
-6. FastAPI fetches the user's roles via `GET {ERPNEXT_URL}/api/resource/User/{username}?fields=["name","roles"]`
+6. FastAPI resolves the user's roles in three steps (`fetch_user_roles()` in `api/auth/oauth2.py`):
+   a. verifies identity with the OAuth access token via `GET .../oauth2.openid_profile` (email from
+      the profile, not the OIDC `sub`, which is a pairwise hash unusable for the lookup below)
+   b. resolves email → ERPNext user `docname` via `GET {ERPNEXT_URL}/api/resource/User` — this and
+      the next call use the **server's own** `ERPNEXT_API_KEY`/`ERPNEXT_API_SECRET`, not the OAuth
+      token, because the OAuth Bearer token can't read the `User` doctype via the resource API
+   c. fetches `GET {ERPNEXT_URL}/api/resource/User/{docname}?fields=["name","roles"]` with the same
+      server credentials
 7. If no allowed roles → `403 Forbidden`
 8. If authorized, FastAPI mints a signed **JWT** (`sub=username`, `roles=[...]`, `exp=now+8h`) and returns it
 9. Streamlit stores the JWT in `st.session_state`; every `POST /query` carries `Authorization: Bearer <jwt>`
@@ -197,6 +204,11 @@ JWT_EXPIRY_HOURS=8
 ALLOWED_ROLES=Purchase Manager,Purchase User,Accounts User,System Manager
 ```
 
+Also required (not new — already used by ingestion, but Option B's role-fetch depends on them too):
+`ERPNEXT_API_KEY`/`ERPNEXT_API_SECRET`. The OAuth access token only proves identity; steps 6b/6c of
+the Auth Flow above use these server-side credentials to read the `User` doctype's roles, since the
+OAuth Bearer token doesn't have resource-API read access to it.
+
 ### Infrastructure Topology
 
 ```
@@ -214,12 +226,15 @@ ERPNext cloud instance
     └── Sends webhooks to https://api.procurement-rag.example.com/webhook/erpnext
 ```
 
-**`docker-compose.yml` for Option B:**
+**`docker-compose.yml` for Option B** (see the actual file at repo root — this is a summary, not a
+verbatim copy):
 ```yaml
 networks:
   rag_internal:
     driver: bridge
-    internal: true        # containers reach each other; unreachable from outside
+    # No public ports on the network itself — nginx is the sole ingress for
+    # app traffic. All services get restart: unless-stopped (survives
+    # instance stop/reboot).
 
 services:
   app:                    # FastAPI — no ports: mapping
@@ -229,9 +244,11 @@ services:
     networks: [rag_internal]
 
   qdrant:
+    ports: ["127.0.0.1:6333:6333"]  # loopback-only — SSH tunnel, see §11
     networks: [rag_internal]
 
   langfuse:
+    ports: ["127.0.0.1:3000:3000"]  # loopback-only — SSH tunnel, see §12
     networks: [rag_internal]
 
   postgres:
@@ -239,7 +256,7 @@ services:
 
   nginx:
     ports: ["80:80", "443:443"]
-    networks: [rag_internal]  # sole bridge to the outside world
+    networks: [rag_internal]  # sole bridge to public internet traffic
 ```
 
 **Nginx configuration notes:**
@@ -512,6 +529,8 @@ submit a PO) and confirm it re-indexes.
   (`docker compose up -d --build <service>`) since `app`/`frontend` bake the source into the image
   via `COPY . .` in the Dockerfile — `--force-recreate` alone reuses the old image and silently keeps
   running stale code.
+- Every service in `docker-compose.yml` has `restart: unless-stopped`, so the whole stack comes back
+  up automatically after a host reboot or Docker daemon restart without manual intervention.
 
 ### 11. Inspecting Qdrant
 

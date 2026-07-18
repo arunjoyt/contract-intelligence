@@ -174,17 +174,18 @@ Point ID is deterministic: `uuid5(NAMESPACE_DNS, f"{docname}:{chunk_index}")`. T
 
 ### Incremental indexing (webhooks)
 
-ERPNext fires webhooks on `on_submit`/`on_update` for `Purchase Order`, `Contract`, `Supplier Scorecard`.
-The handler: verify `X-Frappe-Webhook-Signature` (HMAC-SHA256) → fetch full doc via `ERPNextClient` →
-`delete_by_docname` → re-run parse → chunk → embed → upsert → rebuild BM25 index. No full re-index is
-needed for routine updates.
+ERPNext fires webhooks on `on_submit`/`on_update`/`on_cancel` for `Purchase Order`, `Purchase Invoice`,
+`Contract`, `Terms and Conditions`, `Supplier Scorecard`. The handler: verify `X-Frappe-Webhook-Signature`
+(HMAC-SHA256) → fetch full doc via `ERPNextClient` → `delete_by_docname` → re-run parse → chunk → embed →
+upsert → rebuild BM25 index. No full re-index is needed for routine updates.
 
 ### Query pipeline order
 
 1. `QueryRewriter.rewrite()` — HyDE (default) embeds a hypothetical answer document instead of the raw
    query, improving recall for abstract questions; step-back rewrites the question at a higher abstraction
    level instead.
-2. Metadata filter extraction (heuristic, possibly LLM-assisted) from the original question.
+2. Metadata filter extraction (pure keyword heuristic — doctype/status only, no LLM call, no date-range
+   parsing) from the original question.
 3. `HybridSearch.search()` — BM25 + Qdrant vector search in parallel, fused via RRF, top-20.
 4. `Reranker.rerank()` — cross-encoder scores all 20 `(query, chunk)` pairs, returns top-5.
 5. GPT-4o generation with a system prompt that requires `[docname]`-style citations per claim and forbids
@@ -210,11 +211,11 @@ Two access-control options are documented in `docs/DEPLOYMENT.md` — pick based
 
 Allowed roles in both options: `Purchase Manager`, `Purchase User`, `Accounts User`, `System Manager`.
 
-`docs/DEPLOYMENT.md`'s "Implementation Sequence" table maps these auth additions onto
+`docs/DEPLOYMENT.md`'s "What was built — Option B" table maps these auth additions onto
 `IMPLEMENTATION_PLAN.md` Steps 12/13/15 — consult it before modifying those steps.
 
 ## CI
 
-GitHub Actions (`.github/workflows/ci.yml`, not yet created): `ruff check .` and `pytest tests/` on every
+GitHub Actions (`.github/workflows/ci.yml`): `ruff check .` and `pytest tests/` on every
 push (tests run with no network — OpenAI and Qdrant are mocked); RAGAS evaluation runs only on merge to
 `main`, with `evaluation/results.json` uploaded as an artifact.
