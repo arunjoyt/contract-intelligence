@@ -14,6 +14,7 @@ import os
 
 from openai import OpenAI
 
+from config import OPENAI_MODEL
 from ingestion.embedder import Embedder
 
 _HYDE_SYSTEM = (
@@ -55,7 +56,7 @@ class QueryRewriter:
 
     def _hyde(self, query: str) -> str:
         response = self._client.chat.completions.create(
-            model="gpt-4o",
+            model=OPENAI_MODEL,
             messages=[
                 {"role": "system", "content": _HYDE_SYSTEM},
                 {"role": "user", "content": query},
@@ -67,7 +68,7 @@ class QueryRewriter:
 
     def _step_back(self, query: str) -> str:
         response = self._client.chat.completions.create(
-            model="gpt-4o",
+            model=OPENAI_MODEL,
             messages=[
                 {"role": "system", "content": _STEP_BACK_SYSTEM},
                 {"role": "user", "content": query},

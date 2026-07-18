@@ -33,6 +33,9 @@ _ROOT = Path(__file__).parent
 _PROJECT_ROOT = _ROOT.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
+
+from config import OPENAI_MODEL  # noqa: E402
+
 _DEFAULT_DATASET = _ROOT / "test_dataset.json"
 _DEFAULT_OUTPUT = _ROOT / "results.json"
 
@@ -210,7 +213,7 @@ def _run_question(
     context = "\n\n---\n\n".join(parts)
 
     response = openai_client.chat.completions.create(
-        model="gpt-4o",
+        model=OPENAI_MODEL,
         messages=[
             {"role": "system", "content": _ANSWER_SYSTEM.format(context=context)},
             {"role": "user", "content": question},

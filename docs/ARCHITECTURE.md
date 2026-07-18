@@ -71,6 +71,46 @@ require a second, parallel retrieval path (an exact metadata-filtered fetch, e.g
 generation — a different architecture, not a tuning fix. See #45 for the original investigation and
 root-cause analysis; closed as out of scope.
 
+## Model Configuration
+
+Generation and embedding model names are centralized in `config.py`, set via the `OPENAI_MODEL`
+(default `gpt-4o`) and `EMBEDDING_MODEL` (default `text-embedding-3-small`) env vars — mirroring
+the `QUERY_REWRITE_STRATEGY` pattern. Every call site (`query_rewriter.py`, `query_pipeline.py`,
+`embedder.py`, `evaluate.py`) reads from `config.py` instead of hardcoding a model literal.
+
+**Caveat — embedding model swaps:** `retrieval/vector_store.py`'s `VECTOR_DIM` is derived from
+`EMBEDDING_MODEL` via `config.embedding_dimension()`, which maps model name → vector size. The
+Qdrant collection's vector size is fixed at creation time (`ensure_collection`), so switching to an
+embedding model with a different dimension requires recreating the collection and running a full
+re-ingest — existing points are not re-embedded automatically. Unrecognized model names raise at
+import time until their dimension is added to `config._EMBEDDING_DIMENSIONS`.
+
+### Future Enhancement — provider-agnostic adapter (not implemented)
+
+`OPENAI_MODEL`/`EMBEDDING_MODEL` (above) solve swapping the OpenAI *model version*, not the
+*provider* — every call site (`query_rewriter.py`, `query_pipeline.py`, `embedder.py`,
+`evaluate.py`) still constructs a raw `openai.OpenAI()` client and reads its response shape
+directly (`response.choices[0].message.content` / `response.data[i].embedding`).
+
+A genuine provider swap would need a small hand-rolled seam: a `ChatModel`/`EmbeddingModel`
+interface (two methods each) that every call site depends on instead of a concrete SDK, an
+`OpenAIChatModel`/`OpenAIEmbeddingModel` adapter wrapping today's existing `openai`-SDK code behind
+that interface (a mechanical move, not a rewrite), and `LLM_PROVIDER`/`EMBEDDING_PROVIDER` env vars
+(default `openai`) dispatching to the right adapter class.
+
+`langchain`, `langchain-openai`, and `langchain-community` are already dependencies (used today only
+for `RecursiveCharacterTextSplitter` in `ingestion/chunker.py`) and were considered for this instead
+of a hand-rolled adapter — LangChain's `init_chat_model` factory does exist in the pinned version
+and would normalize the response shape across providers in one move. Rejected for now: it's real
+added dependency/version-risk surface for a swap that isn't happening, versus a hand-rolled adapter
+that stays fully within the codebase's own control and is no larger for the one provider (OpenAI)
+actually in use today.
+
+Either approach touches the OpenAI-response-shape mocking in `tests/test_query_rewriter.py`,
+`tests/test_query_pipeline.py`, and `tests/test_embedder.py` (currently hand-rolled `MagicMock`
+chains matching `.choices[0].message.content` / `.data[i].embedding`). Deferred — see #51; not
+prioritized since no provider swap is currently planned.
+
 ## Document Indexing Strategy
 
 ### Structured documents (PO, Invoice, Scorecard)
