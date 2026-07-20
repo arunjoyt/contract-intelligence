@@ -91,28 +91,18 @@ def test_extract_filters_returns_empty_for_generic_question() -> None:
     assert result == {}
 
 
-def test_extract_filters_detects_purchase_order() -> None:
-    result = _extract_filters("Show me all purchase orders from last month")
-    assert result.get("source_doctype") == "Purchase Order"
-
-
 def test_extract_filters_detects_contract() -> None:
     result = _extract_filters("What does the contract say about liability?")
     assert result.get("source_doctype") == "Contract"
 
 
-def test_extract_filters_detects_supplier_scorecard() -> None:
-    result = _extract_filters("What is the supplier scorecard for Acme?")
-    assert result.get("source_doctype") == "Supplier Scorecard"
-
-
-def test_extract_filters_detects_invoice() -> None:
-    result = _extract_filters("Show outstanding invoices for this quarter")
-    assert result.get("source_doctype") == "Purchase Invoice"
+def test_extract_filters_detects_terms_and_conditions() -> None:
+    result = _extract_filters("What are the terms and conditions for delivery?")
+    assert result.get("source_doctype") == "Terms and Conditions"
 
 
 def test_extract_filters_detects_submitted_status() -> None:
-    result = _extract_filters("List submitted purchase orders")
+    result = _extract_filters("List submitted contracts")
     assert result.get("status") == "Submitted"
 
 
@@ -122,14 +112,14 @@ def test_extract_filters_detects_draft_status() -> None:
 
 
 def test_extract_filters_detects_both_doctype_and_status() -> None:
-    result = _extract_filters("Show me all submitted purchase orders")
-    assert result.get("source_doctype") == "Purchase Order"
+    result = _extract_filters("Show me all submitted contracts")
+    assert result.get("source_doctype") == "Contract"
     assert result.get("status") == "Submitted"
 
 
 def test_extract_filters_is_case_insensitive() -> None:
-    result = _extract_filters("Show me all PURCHASE ORDERS")
-    assert result.get("source_doctype") == "Purchase Order"
+    result = _extract_filters("Show me all CONTRACTS")
+    assert result.get("source_doctype") == "Contract"
 
 
 # ---------------------------------------------------------------------------
@@ -307,12 +297,12 @@ def test_run_merges_extracted_and_caller_filters(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     pipeline = _make_pipeline()
 
-    # "purchase orders" triggers doctype extraction; caller adds supplier filter
-    pipeline.run("Show submitted purchase orders", filters={"supplier": "Acme"})
+    # "contracts" triggers doctype extraction; caller adds supplier filter
+    pipeline.run("Show submitted contracts", filters={"supplier": "Acme"})
 
     call_args = pipeline._hybrid_search.search.call_args
     merged = call_args[0][1]
-    assert merged.get("source_doctype") == "Purchase Order"
+    assert merged.get("source_doctype") == "Contract"
     assert merged.get("status") == "Submitted"
     assert merged.get("supplier") == "Acme"
 
@@ -322,12 +312,12 @@ def test_run_caller_filters_override_extracted(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     pipeline = _make_pipeline()
 
-    # "purchase orders" would set source_doctype=Purchase Order, but caller overrides
-    pipeline.run("Show purchase orders", filters={"source_doctype": "Contract"})
+    # "contracts" would set source_doctype=Contract, but caller overrides
+    pipeline.run("Show contracts", filters={"source_doctype": "Terms and Conditions"})
 
     call_args = pipeline._hybrid_search.search.call_args
     merged = call_args[0][1]
-    assert merged.get("source_doctype") == "Contract"
+    assert merged.get("source_doctype") == "Terms and Conditions"
 
 
 def test_run_without_langfuse_does_not_raise(monkeypatch: pytest.MonkeyPatch) -> None:

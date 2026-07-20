@@ -112,42 +112,46 @@ def vs(embedder):
 # ---------------------------------------------------------------------------
 
 
-async def _first_po_name() -> str:
+async def _first_contract_name() -> str:
     from ingestion.erpnext_client import ERPNextClient
     async with ERPNextClient() as client:
-        pos = await client.get_list("Purchase Order", limit=1)
-    assert pos, "No Purchase Orders on the ERPNext site"
-    return pos[0]["name"]
+        contracts = await client.get_list("Contract", limit=1)
+    assert contracts, "No Contracts on the ERPNext site"
+    return contracts[0]["name"]
 
 
-async def _ingest_po(docname: str, embedder, vs) -> dict:
-    """Full PO ingestion; returns the enriched payload dict that was upserted."""
+async def _ingest_contract(docname: str, embedder, vs) -> dict:
+    """Full Contract ingestion; returns the enriched payload dict for the first chunk."""
     from ingestion.chunker import chunk_text
-    from ingestion.document_parser import po_to_text
+    from ingestion.document_parser import extract_text_from_html
     from ingestion.erpnext_client import ERPNextClient
 
     async with ERPNextClient() as client:
-        po = await client.get_doc("Purchase Order", docname)
-        supplier = await client.get_doc("Supplier", po["supplier"])
+        contract = await client.get_doc("Contract", docname)
+        supplier_name = contract.get("party_name")
+        supplier = await client.get_doc("Supplier", supplier_name) if supplier_name else {}
 
-    text = po_to_text(po)
-    chunks = chunk_text(text, force_single_chunk=True)
+    text = extract_text_from_html(contract.get("contract_terms", ""))
+    chunks = chunk_text(text)
     vectors = embedder.embed_texts([c["text"] for c in chunks])
 
-    payload = {
-        **chunks[0],
-        "source_doctype": "Purchase Order",
-        "docname": docname,
-        "supplier": po.get("supplier"),
-        "supplier_group": supplier.get("supplier_group"),
-        "start_date": po.get("transaction_date"),
-        "end_date": po.get("schedule_date"),
-        "status": po.get("status"),
-        "company": po.get("company"),
-        "vector": vectors[0],
-    }
-    vs.upsert_chunks([payload])
-    return payload
+    enriched = [
+        {
+            **chunk,
+            "source_doctype": "Contract",
+            "docname": docname,
+            "supplier": supplier_name,
+            "supplier_group": supplier.get("supplier_group"),
+            "start_date": contract.get("start_date"),
+            "end_date": contract.get("end_date"),
+            "status": contract.get("status"),
+            "company": contract.get("company"),
+            "vector": vector,
+        }
+        for chunk, vector in zip(chunks, vectors, strict=True)
+    ]
+    vs.upsert_chunks(enriched)
+    return enriched[0]
 
 
 # ===========================================================================
@@ -157,40 +161,39 @@ async def _ingest_po(docname: str, embedder, vs) -> dict:
 
 @live
 @pytest.mark.ingestion
-async def test_erpnext_client_lists_purchase_orders() -> None:
+async def test_erpnext_client_lists_contracts() -> None:
     from ingestion.erpnext_client import ERPNextClient
 
     async with ERPNextClient() as client:
-        pos = await client.get_list("Purchase Order", limit=5)
+        contracts = await client.get_list("Contract", limit=5)
 
-    assert len(pos) > 0
-    assert all("name" in p for p in pos)
+    assert len(contracts) > 0
+    assert all("name" in c for c in contracts)
 
 
 @live
 @pytest.mark.ingestion
-async def test_erpnext_client_fetches_full_po_doc() -> None:
+async def test_erpnext_client_fetches_full_contract_doc() -> None:
     from ingestion.erpnext_client import ERPNextClient
 
     async with ERPNextClient() as client:
-        pos = await client.get_list("Purchase Order", limit=1)
-        po = await client.get_doc("Purchase Order", pos[0]["name"])
+        contracts = await client.get_list("Contract", limit=1)
+        contract = await client.get_doc("Contract", contracts[0]["name"])
 
-    assert po["name"] == pos[0]["name"]
-    assert "supplier" in po
-    assert "items" in po
+    assert contract["name"] == contracts[0]["name"]
+    assert "party_name" in contract
 
 
 @live
 @pytest.mark.ingestion
 async def test_erpnext_client_fetches_supplier_doc() -> None:
-    """supplier_group lives on the Supplier record, not on Purchase Order."""
+    """supplier_group lives on the Supplier record, not on Contract."""
     from ingestion.erpnext_client import ERPNextClient
 
     async with ERPNextClient() as client:
-        pos = await client.get_list("Purchase Order", limit=1)
-        po = await client.get_doc("Purchase Order", pos[0]["name"])
-        supplier = await client.get_doc("Supplier", po["supplier"])
+        contracts = await client.get_list("Contract", limit=1)
+        contract = await client.get_doc("Contract", contracts[0]["name"])
+        supplier = await client.get_doc("Supplier", contract["party_name"])
 
     assert "supplier_group" in supplier
     assert supplier["supplier_group"]  # must be non-null on demo data
@@ -203,29 +206,12 @@ async def test_erpnext_client_raises_not_found_for_bad_docname() -> None:
 
     async with ERPNextClient() as client:
         with pytest.raises(ERPNextNotFoundError):
-            await client.get_doc("Purchase Order", "DOES-NOT-EXIST-99999")
+            await client.get_doc("Contract", "DOES-NOT-EXIST-99999")
 
 
 # ===========================================================================
 # GROUP 1 — Document parser against real ERPNext data
 # ===========================================================================
-
-
-@live
-@pytest.mark.ingestion
-async def test_po_to_text_contains_supplier_and_status() -> None:
-    from ingestion.document_parser import po_to_text
-    from ingestion.erpnext_client import ERPNextClient
-
-    async with ERPNextClient() as client:
-        pos = await client.get_list("Purchase Order", limit=1)
-        po = await client.get_doc("Purchase Order", pos[0]["name"])
-
-    text = po_to_text(po)
-    assert po["supplier"] in text
-    assert po["name"] in text
-    assert po.get("status", "") in text
-    assert "<" not in text  # no raw HTML
 
 
 @live
@@ -255,22 +241,6 @@ async def test_contract_html_stripped_to_plain_text() -> None:
 # ===========================================================================
 # GROUP 1 — Full ingestion pipeline (ERPNext → Qdrant)
 # ===========================================================================
-
-
-@live
-@pytest.mark.ingestion
-async def test_ingest_purchase_order_end_to_end(embedder, vs) -> None:
-    docname = await _first_po_name()
-    payload = await _ingest_po(docname, embedder, vs)
-
-    # Embedding dimensions
-    assert len(payload["vector"]) == 1536
-
-    # Searchable in Qdrant
-    query_vector = embedder.embed_query("purchase order supplier payment terms")
-    results = vs.search(query_vector, top_k=10)
-    retrieved = [r.payload["docname"] for r in results if r.payload]
-    assert docname in retrieved
 
 
 @live
@@ -334,32 +304,36 @@ async def test_ingest_contract_end_to_end(embedder, vs) -> None:
 @live
 @pytest.mark.ingestion
 async def test_idempotent_upsert_does_not_duplicate_points(embedder, vs) -> None:
-    docname = await _first_po_name()
+    docname = await _first_contract_name()
 
-    await _ingest_po(docname, embedder, vs)
-    await _ingest_po(docname, embedder, vs)  # second upsert — same IDs
-
+    await _ingest_contract(docname, embedder, vs)
     all_docs = vs.get_all_texts()
-    count = sum(1 for d in all_docs if d.get("docname") == docname)
-    # PO is force_single_chunk → exactly 1 point regardless of how many times ingested
-    assert count == 1
+    count_first = sum(1 for d in all_docs if d.get("docname") == docname)
+
+    await _ingest_contract(docname, embedder, vs)  # second upsert — same IDs
+    all_docs = vs.get_all_texts()
+    count_second = sum(1 for d in all_docs if d.get("docname") == docname)
+
+    assert count_first == count_second, (
+        f"Duplicate points after re-ingest: {count_first} → {count_second}"
+    )
 
 
 @live
 @pytest.mark.ingestion
-async def test_supplier_group_enriched_in_po_payload(embedder, vs) -> None:
+async def test_supplier_group_enriched_in_contract_payload(embedder, vs) -> None:
     from ingestion.erpnext_client import ERPNextClient
 
     async with ERPNextClient() as client:
-        pos = await client.get_list("Purchase Order", limit=1)
-        po = await client.get_doc("Purchase Order", pos[0]["name"])
-        supplier = await client.get_doc("Supplier", po["supplier"])
+        contracts = await client.get_list("Contract", limit=1)
+        contract = await client.get_doc("Contract", contracts[0]["name"])
+        supplier = await client.get_doc("Supplier", contract["party_name"])
 
     expected_group = supplier.get("supplier_group")
     assert expected_group, "Supplier on demo data must have supplier_group set"
 
-    docname = po["name"]
-    await _ingest_po(docname, embedder, vs)
+    docname = contract["name"]
+    await _ingest_contract(docname, embedder, vs)
 
     all_docs = vs.get_all_texts()
     payload = next((d for d in all_docs if d.get("docname") == docname), None)
@@ -377,21 +351,21 @@ async def test_supplier_group_enriched_in_po_payload(embedder, vs) -> None:
 async def test_vector_store_metadata_filter_restricts_to_supplier(embedder, vs) -> None:
     from ingestion.erpnext_client import ERPNextClient
 
-    # Collect POs across (potentially) multiple suppliers
+    # Collect Contracts across (potentially) multiple suppliers
     async with ERPNextClient() as client:
-        pos = await client.get_list("Purchase Order", limit=5)
+        contracts = await client.get_list("Contract", limit=5)
 
-    if len(pos) < 2:
-        pytest.skip("Need at least 2 Purchase Orders for filter test")
+    if len(contracts) < 2:
+        pytest.skip("Need at least 2 Contracts for filter test")
 
-    # Ingest first two POs
-    p1 = await _ingest_po(pos[0]["name"], embedder, vs)
-    p2 = await _ingest_po(pos[1]["name"], embedder, vs)
+    # Ingest first two Contracts
+    p1 = await _ingest_contract(contracts[0]["name"], embedder, vs)
+    p2 = await _ingest_contract(contracts[1]["name"], embedder, vs)
 
     if p1["supplier"] == p2["supplier"]:
-        pytest.skip("Both POs share the same supplier — need two different suppliers")
+        pytest.skip("Both Contracts share the same supplier — need two different suppliers")
 
-    query_vector = embedder.embed_query("purchase order")
+    query_vector = embedder.embed_query("contract")
     results = vs.search(
         query_vector,
         filter_conditions={"supplier": p1["supplier"]},
@@ -406,8 +380,8 @@ async def test_vector_store_metadata_filter_restricts_to_supplier(embedder, vs) 
 async def test_hybrid_search_bm25_surfaces_exact_docname(embedder, vs) -> None:
     from retrieval.hybrid_search import HybridSearch
 
-    docname = await _first_po_name()
-    await _ingest_po(docname, embedder, vs)
+    docname = await _first_contract_name()
+    await _ingest_contract(docname, embedder, vs)
 
     hs = HybridSearch(embedder=embedder, vector_store=vs)
     hs.build_bm25_index(vs.get_all_texts())
@@ -431,11 +405,11 @@ async def test_hybrid_search_bm25_rebuilt_after_new_upsert(embedder, vs) -> None
     hs.build_bm25_index(vs.get_all_texts())
     before_count = len(hs._corpus_docs)
 
-    # Ingest a second PO (may already be there — idempotent)
+    # Ingest a second Contract (may already be there — idempotent)
     async with ERPNextClient() as client:
-        pos = await client.get_list("Purchase Order", limit=2)
-    second_docname = pos[-1]["name"]
-    await _ingest_po(second_docname, embedder, vs)
+        contracts = await client.get_list("Contract", limit=2)
+    second_docname = contracts[-1]["name"]
+    await _ingest_contract(second_docname, embedder, vs)
 
     # Rebuild — corpus must grow (or stay same if already ingested)
     hs.build_bm25_index(vs.get_all_texts())
@@ -508,12 +482,12 @@ async def test_query_pipeline_returns_answer_with_citations(embedder, vs) -> Non
     """
     import re
 
-    docname = await _first_po_name()
-    payload = await _ingest_po(docname, embedder, vs)
+    docname = await _first_contract_name()
+    payload = await _ingest_contract(docname, embedder, vs)
     supplier = payload["supplier"]
 
     pipeline = _make_pipeline(embedder, vs)
-    result = pipeline.run(f"What purchase orders have been issued to {supplier}?")
+    result = pipeline.run(f"What contracts have been issued to {supplier}?")
 
     assert result["answer"], "Expected a non-empty answer"
     citations = re.findall(r"\[([^\]]+)\]", result["answer"])
@@ -534,21 +508,23 @@ async def test_query_pipeline_respects_supplier_filter(embedder, vs) -> None:
     from ingestion.erpnext_client import ERPNextClient
 
     async with ERPNextClient() as client:
-        pos = await client.get_list("Purchase Order", limit=5)
+        contracts = await client.get_list("Contract", limit=5)
 
-    if len(pos) < 2:
-        pytest.skip("Need at least 2 Purchase Orders to test supplier isolation")
+    if len(contracts) < 2:
+        pytest.skip("Need at least 2 Contracts to test supplier isolation")
 
-    p1 = await _ingest_po(pos[0]["name"], embedder, vs)
-    p2 = await _ingest_po(pos[1]["name"], embedder, vs)
+    p1 = await _ingest_contract(contracts[0]["name"], embedder, vs)
+    p2 = await _ingest_contract(contracts[1]["name"], embedder, vs)
 
     if p1["supplier"] == p2["supplier"]:
-        pytest.skip("Both POs share the same supplier — seed data with two distinct suppliers")
+        pytest.skip(
+            "Both Contracts share the same supplier — seed data with two distinct suppliers"
+        )
 
     target_supplier = p1["supplier"]
     pipeline = _make_pipeline(embedder, vs)
     result = pipeline.run(
-        f"Show me purchase orders from {target_supplier}",
+        f"Show me contracts from {target_supplier}",
         filters={"supplier": target_supplier},
     )
 
@@ -573,7 +549,7 @@ async def test_query_pipeline_refuses_to_hallucinate_when_no_context(embedder, v
     """
     # Ensure there is *something* indexed so the pipeline actually retrieves
     # chunks — we are testing the "irrelevant context" branch, not "empty collection".
-    await _ingest_po(await _first_po_name(), embedder, vs)
+    await _ingest_contract(await _first_contract_name(), embedder, vs)
 
     pipeline = _make_pipeline(embedder, vs)
     result = pipeline.run(
@@ -606,9 +582,9 @@ async def test_hyde_and_step_back_strategies_both_return_answers(embedder, vs) -
     Verifies the strategy env-var wiring and that the step-back prompt path
     reaches GPT-4o generation without error.
     """
-    await _ingest_po(await _first_po_name(), embedder, vs)
+    await _ingest_contract(await _first_contract_name(), embedder, vs)
 
-    question = "What are the payment terms in the purchase orders?"
+    question = "What are the payment terms in the contracts?"
 
     for strategy in ("hyde", "step_back"):
         pipeline = _make_pipeline(embedder, vs, strategy=strategy)
@@ -729,7 +705,7 @@ def test_ingest_full_endpoint_triggers_background_ingest(api_http) -> None:
     payload = points[0]["payload"]
     for field in ("source_doctype", "docname", "supplier", "status"):
         assert field in payload, f"Required field '{field}' missing from indexed payload"
-    assert payload["source_doctype"] in ("Purchase Order", "Contract", "Supplier Scorecard"), (
+    assert payload["source_doctype"] in ("Contract", "Terms and Conditions"), (
         f"Unexpected source_doctype: {payload['source_doctype']!r}"
     )
 
@@ -737,7 +713,7 @@ def test_ingest_full_endpoint_triggers_background_ingest(api_http) -> None:
 @live
 @pytest.mark.api
 def test_webhook_endpoint_reindexes_document(api_http) -> None:
-    """POST /webhook/erpnext re-indexes a real PO from ERPNext.
+    """POST /webhook/erpnext re-indexes a real Contract from ERPNext.
 
     Signs using base64-encoded HMAC to match Frappe's X-Frappe-Webhook-Signature format.
     """
@@ -755,21 +731,21 @@ def test_webhook_endpoint_reindexes_document(api_http) -> None:
         pytest.skip("ERPNEXT_URL / ERPNEXT_API_KEY / ERPNEXT_API_SECRET not set in .env")
 
     resp = httpx.get(
-        f"{erpnext_url}/api/resource/Purchase Order",
+        f"{erpnext_url}/api/resource/Contract",
         params={"limit_page_length": 1, "fields": '["name"]', "filters": '[["docstatus","=","1"]]'},
         headers={"Authorization": f"token {api_key}:{api_secret}"},
         timeout=10,
     )
     resp.raise_for_status()
-    pos = resp.json().get("data", [])
-    if not pos:
-        pytest.skip("No submitted Purchase Orders on the ERPNext site")
+    contracts = resp.json().get("data", [])
+    if not contracts:
+        pytest.skip("No submitted Contracts on the ERPNext site")
 
-    docname = pos[0]["name"]
+    docname = contracts[0]["name"]
     webhook_secret = os.getenv("WEBHOOK_SECRET", "")
     assert webhook_secret, "WEBHOOK_SECRET must be set in .env"
 
-    body = json.dumps({"doctype": "Purchase Order", "docname": docname}).encode()
+    body = json.dumps({"doctype": "Contract", "docname": docname}).encode()
     sig = base64.b64encode(
         hmac.new(webhook_secret.encode(), body, hashlib.sha256).digest()
     ).decode()
@@ -790,7 +766,7 @@ def test_webhook_endpoint_reindexes_document(api_http) -> None:
 
     points = _g4_qdrant_points_for_docname(docname)
     assert points, f"{docname} not found in Qdrant after webhook POST"
-    assert points[0]["payload"]["source_doctype"] == "Purchase Order"
+    assert points[0]["payload"]["source_doctype"] == "Contract"
 
 
 def _erp_credentials() -> tuple[str, str, str]:
@@ -803,11 +779,11 @@ def _erp_credentials() -> tuple[str, str, str]:
     return url, key, secret
 
 
-def _erp_create_and_submit_po(erpnext_url: str, erp_headers: dict) -> tuple[str, str]:
-    """Create a minimal draft PO and submit it. Returns (docname, supplier).
+def _erp_create_and_submit_contract(erpnext_url: str, erp_headers: dict) -> tuple[str, str]:
+    """Create a minimal draft Contract and submit it. Returns (docname, supplier).
 
-    Uses the first available supplier, company, and purchase item on the site.
-    Passes the full created doc to frappe.client.submit so the timestamp check passes.
+    Uses the first available supplier and company on the site. Passes the full
+    created doc to frappe.client.submit so the timestamp check passes.
     """
     import json
 
@@ -823,28 +799,22 @@ def _erp_create_and_submit_po(erpnext_url: str, erp_headers: dict) -> tuple[str,
         params={"limit_page_length": 1, "fields": '["name"]'},
         headers=erp_headers, timeout=10,
     ).json().get("data", [{}])[0].get("name")
-    item_code = httpx.get(
-        f"{erpnext_url}/api/resource/Item",
-        params={
-            "limit_page_length": 1,
-            "fields": '["name"]',
-            "filters": '[["is_purchase_item","=","1"]]',
-        },
-        headers=erp_headers, timeout=10,
-    ).json().get("data", [{}])[0].get("name")
 
-    if not all([supplier, company, item_code]):
-        pytest.skip("Could not find supplier / company / item on ERPNext site")
+    if not all([supplier, company]):
+        pytest.skip("Could not find supplier / company on ERPNext site")
 
-    schedule_date = datetime.now(tz=UTC).strftime("%Y-%m-%d")
+    start_date = datetime.now(tz=UTC).strftime("%Y-%m-%d")
+    end_date = (datetime.now(tz=UTC) + timedelta(days=365)).strftime("%Y-%m-%d")
     create_r = httpx.post(
-        f"{erpnext_url}/api/resource/Purchase Order",
+        f"{erpnext_url}/api/resource/Contract",
         json={
-            "doctype": "Purchase Order",
-            "supplier": supplier,
+            "doctype": "Contract",
+            "party_type": "Supplier",
+            "party_name": supplier,
             "company": company,
-            "schedule_date": schedule_date,
-            "items": [{"item_code": item_code, "qty": 1, "schedule_date": schedule_date}],
+            "start_date": start_date,
+            "end_date": end_date,
+            "contract_terms": "<p>Integration test contract terms.</p>",
         },
         headers=erp_headers, timeout=15,
     )
@@ -861,13 +831,13 @@ def _erp_create_and_submit_po(erpnext_url: str, erp_headers: dict) -> tuple[str,
     return docname, supplier
 
 
-def _erp_cancel_po(erpnext_url: str, erp_headers: dict, docname: str) -> None:
-    """Cancel a submitted PO; silently ignore errors (safe to call in finally)."""
+def _erp_cancel_contract(erpnext_url: str, erp_headers: dict, docname: str) -> None:
+    """Cancel a submitted Contract; silently ignore errors (safe to call in finally)."""
     import httpx
     with contextlib.suppress(Exception):
         httpx.post(
             f"{erpnext_url}/api/method/frappe.client.cancel",
-            data={"doctype": "Purchase Order", "name": docname},
+            data={"doctype": "Contract", "name": docname},
             headers=erp_headers, timeout=10,
         )
 
@@ -886,8 +856,8 @@ def _poll_qdrant(docname: str, *, predicate, timeout: int = 60) -> list[dict]:
 
 @live
 @pytest.mark.api
-def test_erpnext_po_submit_fires_webhook_and_lands_in_qdrant(api_http) -> None:
-    """True E2E: submit a PO in ERPNext → ERPNext background worker fires webhook →
+def test_erpnext_contract_submit_fires_webhook_and_lands_in_qdrant(api_http) -> None:
+    """True E2E: submit a Contract in ERPNext → ERPNext background worker fires webhook →
     doc appears in production Qdrant — without us manually posting to the endpoint.
 
     This is the test that catches Frappe-side issues: wrong signature encoding,
@@ -895,7 +865,7 @@ def test_erpnext_po_submit_fires_webhook_and_lands_in_qdrant(api_http) -> None:
 
     Requires:
       - Frappe background workers running (bench start / bench worker)
-      - po-on-submit webhook enabled with enable_security=1 in ERPNext
+      - contract-on-submit webhook enabled with enable_security=1 in ERPNext
       - FastAPI reachable at API_URL (default http://localhost:8000)
     """
     import json
@@ -911,7 +881,7 @@ def test_erpnext_po_submit_fires_webhook_and_lands_in_qdrant(api_http) -> None:
 
     erp_headers = {"Authorization": f"token {api_key}:{api_secret}"}
 
-    # Gather the first available supplier, company, and buy item from ERPNext
+    # Gather the first available supplier and company from ERPNext
     supplier = httpx.get(
         f"{erpnext_url}/api/resource/Supplier",
         params={"limit_page_length": 1, "fields": '["name"]'},
@@ -922,32 +892,26 @@ def test_erpnext_po_submit_fires_webhook_and_lands_in_qdrant(api_http) -> None:
         params={"limit_page_length": 1, "fields": '["name"]'},
         headers=erp_headers, timeout=10,
     ).json().get("data", [{}])[0].get("name")
-    item_code = httpx.get(
-        f"{erpnext_url}/api/resource/Item",
-        params={
-            "limit_page_length": 1,
-            "fields": '["name"]',
-            "filters": '[["is_purchase_item","=","1"]]',
-        },
-        headers=erp_headers, timeout=10,
-    ).json().get("data", [{}])[0].get("name")
 
-    if not all([supplier, company, item_code]):
-        pytest.skip("Could not find supplier / company / item on ERPNext site")
+    if not all([supplier, company]):
+        pytest.skip("Could not find supplier / company on ERPNext site")
 
-    schedule_date = datetime.now(tz=UTC).strftime("%Y-%m-%d")
-    po_body = {
-        "doctype": "Purchase Order",
-        "supplier": supplier,
+    start_date = datetime.now(tz=UTC).strftime("%Y-%m-%d")
+    end_date = (datetime.now(tz=UTC) + timedelta(days=365)).strftime("%Y-%m-%d")
+    contract_body = {
+        "doctype": "Contract",
+        "party_type": "Supplier",
+        "party_name": supplier,
         "company": company,
-        "schedule_date": schedule_date,
-        "items": [{"item_code": item_code, "qty": 1, "schedule_date": schedule_date}],
+        "start_date": start_date,
+        "end_date": end_date,
+        "contract_terms": "<p>Integration test contract terms.</p>",
     }
 
-    # 1. Create draft PO; keep the full doc dict (contains modified timestamp for submit)
+    # 1. Create draft Contract; keep the full doc dict (contains modified timestamp for submit)
     create_r = httpx.post(
-        f"{erpnext_url}/api/resource/Purchase Order",
-        json=po_body, headers=erp_headers, timeout=15,
+        f"{erpnext_url}/api/resource/Contract",
+        json=contract_body, headers=erp_headers, timeout=15,
     )
     create_r.raise_for_status()
     created_doc = create_r.json()["data"]
@@ -980,36 +944,36 @@ def test_erpnext_po_submit_fires_webhook_and_lands_in_qdrant(api_http) -> None:
         assert points, (
             f"{docname} did not appear in Qdrant within 60 s after ERPNext submission.\n"
             "Check: (1) Frappe background workers running? (bench start / bench worker)\n"
-            "       (2) 'po-on-submit' webhook has enable_security=1 in ERPNext desk\n"
+            "       (2) 'contract-on-submit' webhook has enable_security=1 in ERPNext desk\n"
             "       (3) FastAPI is running and reachable at 127.0.0.1:8000"
         )
 
         payload = points[0]["payload"]
-        assert payload["source_doctype"] == "Purchase Order"
+        assert payload["source_doctype"] == "Contract"
         assert payload["docname"] == docname
         assert payload["supplier"] == supplier
 
     finally:
-        # Cancel the test PO so it doesn't pollute active data; ignore errors
+        # Cancel the test Contract so it doesn't pollute active data; ignore errors
         with contextlib.suppress(Exception):
             httpx.post(
                 f"{erpnext_url}/api/method/frappe.client.cancel",
-                json={"doctype": "Purchase Order", "name": docname},
+                json={"doctype": "Contract", "name": docname},
                 headers=erp_headers, timeout=10,
             )
 
 
 @live
 @pytest.mark.api
-def test_erpnext_po_cancel_fires_webhook_and_updates_qdrant(api_http) -> None:
-    """True E2E: submit a PO → cancel it in ERPNext → Qdrant point shows 'Cancelled'.
+def test_erpnext_contract_cancel_fires_webhook_and_updates_qdrant(api_http) -> None:
+    """True E2E: submit a Contract → cancel it in ERPNext → Qdrant point shows 'Cancelled'.
 
-    Requires the po-on-cancel webhook configured with enable_security=1.
+    Requires the contract-on-cancel webhook configured with enable_security=1.
     ERPNext fires on_cancel asynchronously via background workers; the test
     polls Qdrant for up to 60 s before failing.
 
     RUN_INTEGRATION=1 pytest \
-        tests/test_integration.py::test_erpnext_po_cancel_fires_webhook_and_updates_qdrant -v
+        tests/test_integration.py::test_erpnext_contract_cancel_fires_webhook_and_updates_qdrant -v
     """
     import httpx
 
@@ -1018,19 +982,20 @@ def test_erpnext_po_cancel_fires_webhook_and_updates_qdrant(api_http) -> None:
 
     docname = ""
     try:
-        docname, supplier = _erp_create_and_submit_po(erpnext_url, erp_headers)
+        docname, supplier = _erp_create_and_submit_contract(erpnext_url, erp_headers)
 
         # Wait for on_submit to land so we have a baseline point in Qdrant
         points = _poll_qdrant(docname, predicate=lambda pts: len(pts) > 0, timeout=60)
         assert points, (
             f"{docname} did not appear in Qdrant after submission — cannot test cancel flow.\n"
-            "Check: Frappe workers running? po-on-submit webhook configured with enable_security=1?"
+            "Check: Frappe workers running? "
+            "contract-on-submit webhook configured with enable_security=1?"
         )
 
         # Cancel — frappe.client.cancel takes doctype + name (no full-doc timestamp needed)
         httpx.post(
             f"{erpnext_url}/api/method/frappe.client.cancel",
-            data={"doctype": "Purchase Order", "name": docname},
+            data={"doctype": "Contract", "name": docname},
             headers=erp_headers, timeout=15,
         ).raise_for_status()
 
@@ -1044,7 +1009,7 @@ def test_erpnext_po_cancel_fires_webhook_and_updates_qdrant(api_http) -> None:
         assert points, (
             f"{docname} disappeared from Qdrant after cancel — "
             "expected re-index with status='Cancelled'.\n"
-            "Check: po-on-cancel webhook configured? enable_security=1?"
+            "Check: contract-on-cancel webhook configured? enable_security=1?"
         )
         statuses = [p["payload"].get("status") for p in points]
         assert all(s == "Cancelled" for s in statuses), (
@@ -1052,7 +1017,7 @@ def test_erpnext_po_cancel_fires_webhook_and_updates_qdrant(api_http) -> None:
         )
 
     finally:
-        # PO is already cancelled in the test body; nothing to clean up
+        # Contract is already cancelled in the test body; nothing to clean up
         pass
 
 
@@ -1673,7 +1638,7 @@ def _g9_first_erpnext_doc(doctype: str) -> str | None:
     api_secret = os.getenv("ERPNEXT_API_SECRET", "")
     if not all([erpnext_url, api_key, api_secret]):
         return None
-    filters = '[["docstatus","=","1"]]' if doctype != "Supplier Scorecard" else "[]"
+    filters = '[["docstatus","=","1"]]'
     r = httpx.get(
         f"{erpnext_url}/api/resource/{doctype.replace(' ', '%20')}",
         params={"limit_page_length": 1, "fields": '["name"]', "filters": filters},
@@ -1749,98 +1714,6 @@ def webhook_http_client(embedder, vs):
 
 @live
 @pytest.mark.webhook
-def test_webhook_po_lands_in_qdrant(webhook_http_client, vs) -> None:
-    """Signed PO webhook → handler fetches doc from ERPNext → point appears in test Qdrant."""
-    docname = _g9_first_erpnext_doc("Purchase Order")
-    if not docname:
-        pytest.skip("No submitted Purchase Orders on ERPNext site")
-
-    # Clear any pre-existing vectors for this docname in the test collection
-    vs.delete_by_docname(docname)
-
-    r = _g9_post_webhook(webhook_http_client, "Purchase Order", docname)
-    assert r.status_code == 200, f"Webhook returned {r.status_code}: {r.text}"
-    assert r.json() == {"status": "indexed", "docname": docname}
-
-    points = _g9_qdrant_points_for_docname(docname, vs._collection)
-    assert len(points) > 0, f"{docname} not found in Qdrant after webhook"
-
-
-@live
-@pytest.mark.webhook
-def test_webhook_po_metadata_matches_erpnext(webhook_http_client, vs) -> None:
-    """Qdrant payload for the indexed PO has correct source_doctype, docname, and supplier."""
-    import httpx
-
-    docname = _g9_first_erpnext_doc("Purchase Order")
-    if not docname:
-        pytest.skip("No submitted Purchase Orders on ERPNext site")
-
-    # Fetch ground-truth from ERPNext
-    erpnext_url = os.getenv("ERPNEXT_URL", "")
-    api_key = os.getenv("ERPNEXT_API_KEY", "")
-    api_secret = os.getenv("ERPNEXT_API_SECRET", "")
-    po = httpx.get(
-        f"{erpnext_url}/api/resource/Purchase%20Order/{docname}",
-        headers={"Authorization": f"token {api_key}:{api_secret}"},
-        timeout=10,
-    ).json()["data"]
-
-    _g9_post_webhook(webhook_http_client, "Purchase Order", docname)
-
-    points = _g9_qdrant_points_for_docname(docname, vs._collection)
-    assert points, f"{docname} not in Qdrant"
-
-    payload = points[0]["payload"]
-    assert payload["source_doctype"] == "Purchase Order"
-    assert payload["docname"] == docname
-    assert payload["supplier"] == po.get("supplier"), (
-        f"supplier mismatch: Qdrant={payload['supplier']!r}, ERPNext={po.get('supplier')!r}"
-    )
-    assert payload["status"] == po.get("status"), (
-        f"status mismatch: Qdrant={payload['status']!r}, ERPNext={po.get('status')!r}"
-    )
-
-
-@live
-@pytest.mark.webhook
-def test_webhook_po_is_searchable_by_vector(webhook_http_client, vs, embedder) -> None:
-    """PO indexed via webhook is retrievable through vector search."""
-    docname = _g9_first_erpnext_doc("Purchase Order")
-    if not docname:
-        pytest.skip("No submitted Purchase Orders on ERPNext site")
-
-    _g9_post_webhook(webhook_http_client, "Purchase Order", docname)
-
-    query_vector = embedder.embed_query("purchase order supplier payment terms")
-    results = vs.search(query_vector, top_k=20)
-    retrieved = [r.payload["docname"] for r in results if r.payload]
-    assert docname in retrieved, (
-        f"{docname} not found in vector search results after webhook indexing"
-    )
-
-
-@live
-@pytest.mark.webhook
-def test_webhook_po_reindex_is_idempotent(webhook_http_client, vs) -> None:
-    """Re-sending the same webhook does not create duplicate Qdrant points."""
-    docname = _g9_first_erpnext_doc("Purchase Order")
-    if not docname:
-        pytest.skip("No submitted Purchase Orders on ERPNext site")
-
-    _g9_post_webhook(webhook_http_client, "Purchase Order", docname)
-    count_first = len(_g9_qdrant_points_for_docname(docname, vs._collection))
-
-    _g9_post_webhook(webhook_http_client, "Purchase Order", docname)
-    count_second = len(_g9_qdrant_points_for_docname(docname, vs._collection))
-
-    assert count_first == count_second, (
-        f"Duplicate points after re-index: {count_first} → {count_second}"
-    )
-
-
-@live
-@pytest.mark.webhook
 def test_webhook_contract_lands_in_qdrant(webhook_http_client, vs) -> None:
     """Signed Contract webhook → doc is fetched from ERPNext and indexed in Qdrant."""
     docname = _g9_first_erpnext_doc("Contract")
@@ -1863,40 +1736,88 @@ def test_webhook_contract_lands_in_qdrant(webhook_http_client, vs) -> None:
 
 @live
 @pytest.mark.webhook
-def test_webhook_purchase_invoice_lands_in_qdrant(webhook_http_client, vs) -> None:
-    """Signed Purchase Invoice webhook → handler fetches doc from ERPNext → point
-    appears in test Qdrant (issue #52 — Purchase Invoice was never wired up)."""
-    docname = _g9_first_erpnext_doc("Purchase Invoice")
+def test_webhook_contract_metadata_matches_erpnext(webhook_http_client, vs) -> None:
+    """Qdrant payload for the indexed Contract has correct source_doctype, docname, supplier."""
+    import httpx
+
+    docname = _g9_first_erpnext_doc("Contract")
     if not docname:
-        pytest.skip("No submitted Purchase Invoices on ERPNext site")
+        pytest.skip("No submitted Contracts on ERPNext site")
 
-    vs.delete_by_docname(docname)
+    # Fetch ground-truth from ERPNext
+    erpnext_url = os.getenv("ERPNEXT_URL", "")
+    api_key = os.getenv("ERPNEXT_API_KEY", "")
+    api_secret = os.getenv("ERPNEXT_API_SECRET", "")
+    contract = httpx.get(
+        f"{erpnext_url}/api/resource/Contract/{docname}",
+        headers={"Authorization": f"token {api_key}:{api_secret}"},
+        timeout=10,
+    ).json()["data"]
 
-    r = _g9_post_webhook(webhook_http_client, "Purchase Invoice", docname)
-    assert r.status_code == 200, f"Webhook returned {r.status_code}: {r.text}"
-    assert r.json() == {"status": "indexed", "docname": docname}
+    _g9_post_webhook(webhook_http_client, "Contract", docname)
 
     points = _g9_qdrant_points_for_docname(docname, vs._collection)
-    assert len(points) > 0, f"{docname} not found in Qdrant after webhook"
-    assert points[0]["payload"]["source_doctype"] == "Purchase Invoice"
+    assert points, f"{docname} not in Qdrant"
+
+    payload = points[0]["payload"]
+    assert payload["source_doctype"] == "Contract"
+    assert payload["docname"] == docname
+    assert payload["supplier"] == contract.get("party_name"), (
+        f"supplier mismatch: Qdrant={payload['supplier']!r}, ERPNext={contract.get('party_name')!r}"
+    )
+    assert payload["status"] == contract.get("status"), (
+        f"status mismatch: Qdrant={payload['status']!r}, ERPNext={contract.get('status')!r}"
+    )
+
+
+@live
+@pytest.mark.webhook
+def test_webhook_contract_is_searchable_by_vector(webhook_http_client, vs, embedder) -> None:
+    """Contract indexed via webhook is retrievable through vector search."""
+    docname = _g9_first_erpnext_doc("Contract")
+    if not docname:
+        pytest.skip("No submitted Contracts on ERPNext site")
+
+    _g9_post_webhook(webhook_http_client, "Contract", docname)
+
+    query_vector = embedder.embed_query("contract supplier payment terms")
+    results = vs.search(query_vector, top_k=20)
+    retrieved = [r.payload["docname"] for r in results if r.payload]
+    assert docname in retrieved, (
+        f"{docname} not found in vector search results after webhook indexing"
+    )
+
+
+@live
+@pytest.mark.webhook
+def test_webhook_contract_reindex_is_idempotent(webhook_http_client, vs) -> None:
+    """Re-sending the same webhook does not create duplicate Qdrant points."""
+    docname = _g9_first_erpnext_doc("Contract")
+    if not docname:
+        pytest.skip("No submitted Contracts on ERPNext site")
+
+    _g9_post_webhook(webhook_http_client, "Contract", docname)
+    count_first = len(_g9_qdrant_points_for_docname(docname, vs._collection))
+
+    _g9_post_webhook(webhook_http_client, "Contract", docname)
+    count_second = len(_g9_qdrant_points_for_docname(docname, vs._collection))
+
+    assert count_first == count_second, (
+        f"Duplicate points after re-index: {count_first} → {count_second}"
+    )
 
 
 @live
 @pytest.mark.webhook
 def test_webhook_doc_with_pdf_attachment_indexes_extra_chunks(webhook_http_client, vs) -> None:
-    """A Purchase Order/Contract with an attached PDF gets extra chunks from the
-    attachment's extracted text on top of its own serialized/HTML text — proves the
-    real ERPNext File download + pypdf extraction path works end-to-end (issue #52),
-    not just the mocked version in test_webhook_handler.py."""
-    docname = None
-    doctype = None
-    for candidate_doctype in ("Purchase Order", "Contract"):
-        docname = _g9_first_doc_with_pdf_attachment(candidate_doctype)
-        if docname:
-            doctype = candidate_doctype
-            break
+    """A Contract with an attached PDF gets extra chunks from the attachment's
+    extracted text on top of its own HTML text — proves the real ERPNext File
+    download + pypdf extraction path works end-to-end (issue #52), not just the
+    mocked version in test_webhook_handler.py."""
+    doctype = "Contract"
+    docname = _g9_first_doc_with_pdf_attachment(doctype)
     if not docname:
-        pytest.skip("No Purchase Order or Contract with a PDF attachment on ERPNext site")
+        pytest.skip("No Contract with a PDF attachment on ERPNext site")
 
     vs.delete_by_docname(docname)
 
