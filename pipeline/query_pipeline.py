@@ -52,20 +52,14 @@ Context:
 
 # Keywords used for heuristic doctype detection in the question text.
 _DOCTYPE_KEYWORDS: dict[str, list[str]] = {
-    "Purchase Order": ["purchase order", " po ", "po-"],
-    "Purchase Invoice": ["purchase invoice", "invoice"],
     "Contract": ["contract"],
-    "Supplier Scorecard": ["scorecard", "supplier scorecard"],
     "Terms and Conditions": ["terms and conditions"],
-    "Supplier": ["supplier"],
 }
 
 _STATUS_KEYWORDS: list[str] = [
     "submitted",
     "draft",
     "cancelled",
-    "paid",
-    "unpaid",
     "active",
 ]
 

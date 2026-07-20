@@ -20,7 +20,7 @@ from ingestion.embedder import Embedder
 _HYDE_SYSTEM = (
     "You are a procurement document generator. "
     "Given a user question, write a short hypothetical procurement document "
-    "(Purchase Order, Contract, Supplier Scorecard, or similar) that would directly "
+    "(a Contract or Terms and Conditions document) that would directly "
     "answer the question. Be concise — 3–6 sentences maximum."
 )
 
