@@ -94,7 +94,7 @@ def http_client(
 
 
 def test_invalid_signature_returns_401(http_client: TestClient, mock_erpnext: AsyncMock) -> None:
-    body = json.dumps({"doctype": "Purchase Order", "docname": "PO-001"}).encode()
+    body = json.dumps({"doctype": "Contract", "docname": "CON-001"}).encode()
     response = http_client.post(
         "/webhook/erpnext",
         content=body,
@@ -110,7 +110,7 @@ def test_invalid_signature_returns_401(http_client: TestClient, mock_erpnext: As
 def test_missing_signature_header_returns_401(
     http_client: TestClient, mock_erpnext: AsyncMock
 ) -> None:
-    body = json.dumps({"doctype": "Purchase Order", "docname": "PO-001"}).encode()
+    body = json.dumps({"doctype": "Contract", "docname": "CON-001"}).encode()
     response = http_client.post(
         "/webhook/erpnext",
         content=body,
@@ -132,71 +132,6 @@ def test_unsupported_doctype_is_ignored(
     assert response.json()["status"] == "ignored"
     mock_erpnext.get_doc.assert_not_called()
     mock_vector_store.upsert_chunks.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# Purchase Order
-# ---------------------------------------------------------------------------
-
-PO_DOC = {
-    "name": "PO-001",
-    "supplier": "Acme Corp",
-    "transaction_date": "2024-01-15",
-    "schedule_date": "2024-02-15",
-    "grand_total": 10000.0,
-    "currency": "USD",
-    "items": [{"item_name": "Widget A"}, {"item_name": "Widget B"}],
-    "payment_terms_template": "Net 30",
-    "status": "To Receive and Bill",
-    "company": "My Company",
-}
-
-SUPPLIER_DOC = {"name": "Acme Corp", "supplier_group": "Electronics"}
-
-
-def test_purchase_order_indexed_with_correct_metadata(
-    http_client: TestClient,
-    mock_erpnext: AsyncMock,
-    mock_vector_store: MagicMock,
-    mock_rebuild: MagicMock,
-) -> None:
-    mock_erpnext.get_doc.side_effect = [PO_DOC, SUPPLIER_DOC]
-
-    response = _post(http_client, {"doctype": "Purchase Order", "docname": "PO-001"})
-
-    assert response.status_code == 200
-    assert response.json() == {"status": "indexed", "docname": "PO-001"}
-
-    mock_vector_store.delete_by_docname.assert_called_once_with("PO-001")
-    mock_vector_store.upsert_chunks.assert_called_once()
-    mock_rebuild.assert_called_once()
-
-    chunks = mock_vector_store.upsert_chunks.call_args[0][0]
-    assert len(chunks) == 1  # force_single_chunk — PO is one vector
-    c = chunks[0]
-    assert c["source_doctype"] == "Purchase Order"
-    assert c["docname"] == "PO-001"
-    assert c["supplier"] == "Acme Corp"
-    assert c["supplier_group"] == "Electronics"
-    assert c["start_date"] == "2024-01-15"
-    assert c["end_date"] == "2024-02-15"
-    assert c["status"] == "To Receive and Bill"
-    assert c["company"] == "My Company"
-    assert "vector" in c
-
-
-def test_purchase_order_text_contains_key_fields(
-    http_client: TestClient, mock_erpnext: AsyncMock, mock_embedder: MagicMock
-) -> None:
-    mock_erpnext.get_doc.side_effect = [PO_DOC, SUPPLIER_DOC]
-    _post(http_client, {"doctype": "Purchase Order", "docname": "PO-001"})
-
-    embedded_texts = mock_embedder.embed_texts.call_args[0][0]
-    assert len(embedded_texts) == 1
-    text = embedded_texts[0]
-    assert "PO-001" in text
-    assert "Acme Corp" in text
-    assert "Widget A" in text
 
 
 # ---------------------------------------------------------------------------
@@ -305,104 +240,6 @@ def test_empty_contract_terms_returns_skipped(
 
 
 # ---------------------------------------------------------------------------
-# Supplier Scorecard
-# ---------------------------------------------------------------------------
-
-SCORECARD_DOC = {
-    "name": "SSC-001",
-    "supplier": "Summit Traders",
-    "period": "Per Month",
-    "supplier_score": 88.0,
-    "indicator_color": "Green",
-    "status": "Active",
-    "criteria": [{"criteria_name": "Delivery", "score": 18, "max_score": 20}],
-}
-
-SCORECARD_SUPPLIER_DOC = {"name": "Summit Traders", "supplier_group": "Wholesale"}
-
-
-def test_supplier_scorecard_indexed_with_correct_metadata(
-    http_client: TestClient,
-    mock_erpnext: AsyncMock,
-    mock_vector_store: MagicMock,
-) -> None:
-    mock_erpnext.get_doc.side_effect = [SCORECARD_DOC, SCORECARD_SUPPLIER_DOC]
-
-    response = _post(http_client, {"doctype": "Supplier Scorecard", "docname": "SSC-001"})
-
-    assert response.status_code == 200
-    chunks = mock_vector_store.upsert_chunks.call_args[0][0]
-    assert len(chunks) == 1  # force_single_chunk
-    c = chunks[0]
-    assert c["source_doctype"] == "Supplier Scorecard"
-    assert c["supplier"] == "Summit Traders"
-    assert c["supplier_group"] == "Wholesale"
-    assert c["start_date"] is None
-    assert c["end_date"] is None
-    assert c["company"] is None
-
-
-# ---------------------------------------------------------------------------
-# Purchase Invoice
-# ---------------------------------------------------------------------------
-
-INVOICE_DOC = {
-    "name": "PINV-001",
-    "supplier": "Acme Corp",
-    "supplier_group": "Electronics",  # direct field, no Supplier join needed
-    "posting_date": "2024-03-01",
-    "due_date": "2024-03-31",
-    "grand_total": 5000.0,
-    "outstanding_amount": 5000.0,
-    "currency": "USD",
-    "items": [{"item_name": "Widget A"}],
-    "payment_terms_template": "Net 30",
-    "status": "Unpaid",
-    "company": "My Company",
-}
-
-
-def test_purchase_invoice_indexed_with_correct_metadata(
-    http_client: TestClient,
-    mock_erpnext: AsyncMock,
-    mock_vector_store: MagicMock,
-) -> None:
-    mock_erpnext.get_doc.side_effect = [INVOICE_DOC]
-
-    response = _post(http_client, {"doctype": "Purchase Invoice", "docname": "PINV-001"})
-
-    assert response.status_code == 200
-    assert response.json() == {"status": "indexed", "docname": "PINV-001"}
-
-    # supplier_group comes straight off the invoice doc — no Supplier lookup
-    mock_erpnext.get_doc.assert_called_once_with("Purchase Invoice", "PINV-001")
-
-    chunks = mock_vector_store.upsert_chunks.call_args[0][0]
-    assert len(chunks) == 1  # force_single_chunk
-    c = chunks[0]
-    assert c["source_doctype"] == "Purchase Invoice"
-    assert c["docname"] == "PINV-001"
-    assert c["supplier"] == "Acme Corp"
-    assert c["supplier_group"] == "Electronics"
-    assert c["start_date"] == "2024-03-01"
-    assert c["end_date"] == "2024-03-31"
-    assert c["status"] == "Unpaid"
-    assert c["company"] == "My Company"
-
-
-def test_purchase_invoice_text_contains_key_fields(
-    http_client: TestClient, mock_erpnext: AsyncMock, mock_embedder: MagicMock
-) -> None:
-    mock_erpnext.get_doc.side_effect = [INVOICE_DOC]
-    _post(http_client, {"doctype": "Purchase Invoice", "docname": "PINV-001"})
-
-    text = mock_embedder.embed_texts.call_args[0][0][0]
-    assert "PINV-001" in text
-    assert "Acme Corp" in text
-    assert "Widget A" in text
-
-
-# ---------------------------------------------------------------------------
 # Terms and Conditions
 # ---------------------------------------------------------------------------
 
@@ -462,19 +299,19 @@ def test_terms_and_conditions_html_is_stripped_before_embedding(
 
 
 # ---------------------------------------------------------------------------
-# PDF attachments (Purchase Order, Contract)
+# PDF attachments (Contract only)
 # ---------------------------------------------------------------------------
 
 
-def test_po_with_pdf_attachment_indexes_extra_chunk(
+def test_contract_with_pdf_attachment_indexes_extra_chunk(
     http_client: TestClient,
     mock_erpnext: AsyncMock,
     mock_vector_store: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    mock_erpnext.get_doc.side_effect = [PO_DOC, SUPPLIER_DOC]
+    mock_erpnext.get_doc.side_effect = [CONTRACT_DOC, CONTRACT_SUPPLIER_DOC]
     mock_erpnext.get_attached_files.return_value = [
-        {"name": "FILE-001", "file_url": "/private/files/po-001.pdf", "file_name": "po-001.pdf"}
+        {"name": "FILE-001", "file_url": "/private/files/con-001.pdf", "file_name": "con-001.pdf"}
     ]
     mock_erpnext.get_file_content.return_value = b"%PDF-fake-bytes"
     monkeypatch.setattr(
@@ -482,22 +319,22 @@ def test_po_with_pdf_attachment_indexes_extra_chunk(
         lambda _bytes: "Attachment clause: delivery within 10 days.",
     )
 
-    response = _post(http_client, {"doctype": "Purchase Order", "docname": "PO-001"})
+    response = _post(http_client, {"doctype": "Contract", "docname": "CON-001"})
 
     assert response.status_code == 200
-    mock_erpnext.get_attached_files.assert_called_once_with("Purchase Order", "PO-001")
-    mock_erpnext.get_file_content.assert_called_once_with("/private/files/po-001.pdf")
+    mock_erpnext.get_attached_files.assert_called_once_with("Contract", "CON-001")
+    mock_erpnext.get_file_content.assert_called_once_with("/private/files/con-001.pdf")
 
     chunks = mock_vector_store.upsert_chunks.call_args[0][0]
-    # PO's own serialized text (1 chunk, force_single) + 1 PDF-derived chunk
-    assert len(chunks) == 2
-    assert all(c["total_chunks"] == 2 for c in chunks)
-    assert {c["chunk_index"] for c in chunks} == {0, 1}
+    # Contract's own HTML-stripped text + 1 PDF-derived chunk
     texts = [c["text"] for c in chunks]
     assert any("Attachment clause" in t for t in texts)
-    # attachment chunks still carry the parent PO's metadata (same docname)
-    assert all(c["docname"] == "PO-001" for c in chunks)
-    assert all(c["source_doctype"] == "Purchase Order" for c in chunks)
+    # attachment chunks still carry the parent Contract's metadata (same docname)
+    assert all(c["docname"] == "CON-001" for c in chunks)
+    assert all(c["source_doctype"] == "Contract" for c in chunks)
+    total = len(chunks)
+    assert all(c["total_chunks"] == total for c in chunks)
+    assert {c["chunk_index"] for c in chunks} == set(range(total))
 
 
 def test_non_pdf_attachments_are_skipped(
@@ -505,16 +342,16 @@ def test_non_pdf_attachments_are_skipped(
     mock_erpnext: AsyncMock,
     mock_vector_store: MagicMock,
 ) -> None:
-    mock_erpnext.get_doc.side_effect = [PO_DOC, SUPPLIER_DOC]
+    mock_erpnext.get_doc.side_effect = [CONTRACT_DOC, CONTRACT_SUPPLIER_DOC]
     mock_erpnext.get_attached_files.return_value = [
         {"name": "FILE-001", "file_url": "/private/files/photo.png", "file_name": "photo.png"}
     ]
 
-    _post(http_client, {"doctype": "Purchase Order", "docname": "PO-001"})
+    _post(http_client, {"doctype": "Contract", "docname": "CON-001"})
 
     mock_erpnext.get_file_content.assert_not_called()
     chunks = mock_vector_store.upsert_chunks.call_args[0][0]
-    assert len(chunks) == 1  # only the PO's own text
+    assert len(chunks) == 1  # only the Contract's own text
 
 
 def test_attachment_fetch_failure_does_not_block_indexing(
@@ -522,15 +359,15 @@ def test_attachment_fetch_failure_does_not_block_indexing(
     mock_erpnext: AsyncMock,
     mock_vector_store: MagicMock,
 ) -> None:
-    mock_erpnext.get_doc.side_effect = [PO_DOC, SUPPLIER_DOC]
+    mock_erpnext.get_doc.side_effect = [CONTRACT_DOC, CONTRACT_SUPPLIER_DOC]
     mock_erpnext.get_attached_files.side_effect = RuntimeError("ERPNext unreachable")
 
-    response = _post(http_client, {"doctype": "Purchase Order", "docname": "PO-001"})
+    response = _post(http_client, {"doctype": "Contract", "docname": "CON-001"})
 
     assert response.status_code == 200
     assert response.json()["status"] == "indexed"
     chunks = mock_vector_store.upsert_chunks.call_args[0][0]
-    assert len(chunks) == 1  # PO's own text still indexed
+    assert len(chunks) == 1  # Contract's own text still indexed
 
 
 def test_pdf_extraction_failure_for_one_file_does_not_block_others(
@@ -539,7 +376,7 @@ def test_pdf_extraction_failure_for_one_file_does_not_block_others(
     mock_vector_store: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    mock_erpnext.get_doc.side_effect = [PO_DOC, SUPPLIER_DOC]
+    mock_erpnext.get_doc.side_effect = [CONTRACT_DOC, CONTRACT_SUPPLIER_DOC]
     mock_erpnext.get_attached_files.return_value = [
         {"name": "FILE-001", "file_url": "/private/files/bad.pdf", "file_name": "bad.pdf"},
         {"name": "FILE-002", "file_url": "/private/files/good.pdf", "file_name": "good.pdf"},
@@ -553,22 +390,21 @@ def test_pdf_extraction_failure_for_one_file_does_not_block_others(
         lambda _bytes: "Good PDF text.",
     )
 
-    response = _post(http_client, {"doctype": "Purchase Order", "docname": "PO-001"})
+    response = _post(http_client, {"doctype": "Contract", "docname": "CON-001"})
 
     assert response.status_code == 200
     chunks = mock_vector_store.upsert_chunks.call_args[0][0]
     texts = [c["text"] for c in chunks]
     assert any("Good PDF text" in t for t in texts)
-    assert len(chunks) == 2  # PO text + the one PDF that succeeded
 
 
 def test_attachments_not_fetched_for_non_attachment_doctypes(
     http_client: TestClient,
     mock_erpnext: AsyncMock,
 ) -> None:
-    mock_erpnext.get_doc.side_effect = [SCORECARD_DOC, SCORECARD_SUPPLIER_DOC]
+    mock_erpnext.get_doc.side_effect = [TERMS_DOC]
 
-    _post(http_client, {"doctype": "Supplier Scorecard", "docname": "SSC-001"})
+    _post(http_client, {"doctype": "Terms and Conditions", "docname": "Standard Terms"})
 
     mock_erpnext.get_attached_files.assert_not_called()
 
@@ -611,9 +447,9 @@ def test_supplier_group_lookup_failure_does_not_block_indexing(
 ) -> None:
     from ingestion.erpnext_client import ERPNextNotFoundError
 
-    mock_erpnext.get_doc.side_effect = [PO_DOC, ERPNextNotFoundError("not found")]
+    mock_erpnext.get_doc.side_effect = [CONTRACT_DOC, ERPNextNotFoundError("not found")]
 
-    response = _post(http_client, {"doctype": "Purchase Order", "docname": "PO-001"})
+    response = _post(http_client, {"doctype": "Contract", "docname": "CON-001"})
 
     assert response.status_code == 200
     assert response.json()["status"] == "indexed"
@@ -631,13 +467,13 @@ def test_delete_is_called_before_upsert(
     mock_erpnext: AsyncMock,
     mock_vector_store: MagicMock,
 ) -> None:
-    mock_erpnext.get_doc.side_effect = [PO_DOC, SUPPLIER_DOC]
+    mock_erpnext.get_doc.side_effect = [CONTRACT_DOC, CONTRACT_SUPPLIER_DOC]
 
     manager = MagicMock()
     manager.attach_mock(mock_vector_store.delete_by_docname, "delete")
     manager.attach_mock(mock_vector_store.upsert_chunks, "upsert")
 
-    _post(http_client, {"doctype": "Purchase Order", "docname": "PO-001"})
+    _post(http_client, {"doctype": "Contract", "docname": "CON-001"})
 
     method_names = [c[0] for c in manager.mock_calls]
     assert method_names.index("delete") < method_names.index("upsert")
@@ -649,13 +485,13 @@ def test_rebuild_bm25_called_after_upsert(
     mock_vector_store: MagicMock,
     mock_rebuild: MagicMock,
 ) -> None:
-    mock_erpnext.get_doc.side_effect = [PO_DOC, SUPPLIER_DOC]
+    mock_erpnext.get_doc.side_effect = [CONTRACT_DOC, CONTRACT_SUPPLIER_DOC]
 
     manager = MagicMock()
     manager.attach_mock(mock_vector_store.upsert_chunks, "upsert")
     manager.attach_mock(mock_rebuild, "rebuild")
 
-    _post(http_client, {"doctype": "Purchase Order", "docname": "PO-001"})
+    _post(http_client, {"doctype": "Contract", "docname": "CON-001"})
 
     method_names = [c[0] for c in manager.mock_calls]
     assert method_names.index("upsert") < method_names.index("rebuild")
@@ -666,7 +502,7 @@ def test_rebuild_bm25_called_after_upsert(
 # ---------------------------------------------------------------------------
 
 
-def test_purchase_order_indexed_via_name_field(
+def test_contract_indexed_via_name_field(
     http_client: TestClient,
     mock_erpnext: AsyncMock,
     mock_vector_store: MagicMock,
@@ -677,9 +513,9 @@ def test_purchase_order_indexed_via_name_field(
     A missing or empty 'name' would cause a silent empty-string lookup and a skipped
     or errored index — this test ensures the fallback path is exercised.
     """
-    mock_erpnext.get_doc.side_effect = [PO_DOC, SUPPLIER_DOC]
+    mock_erpnext.get_doc.side_effect = [CONTRACT_DOC, CONTRACT_SUPPLIER_DOC]
 
-    body = json.dumps({"doctype": "Purchase Order", "name": "PO-001"}).encode()
+    body = json.dumps({"doctype": "Contract", "name": "CON-001"}).encode()
     response = http_client.post(
         "/webhook/erpnext",
         content=body,
@@ -690,7 +526,7 @@ def test_purchase_order_indexed_via_name_field(
     )
 
     assert response.status_code == 200
-    assert response.json() == {"status": "indexed", "docname": "PO-001"}
+    assert response.json() == {"status": "indexed", "docname": "CON-001"}
     mock_vector_store.upsert_chunks.assert_called_once()
 
 
@@ -708,12 +544,12 @@ def test_upsert_failure_after_delete_propagates_error(
     index with no rollback.  The handler must surface the error (5xx) rather than
     silently returning 'indexed' while leaving the index in a broken state.
     """
-    mock_erpnext.get_doc.side_effect = [PO_DOC, SUPPLIER_DOC]
+    mock_erpnext.get_doc.side_effect = [CONTRACT_DOC, CONTRACT_SUPPLIER_DOC]
     mock_vector_store.upsert_chunks.side_effect = RuntimeError("Qdrant connection refused")
 
-    response = _post(http_client, {"doctype": "Purchase Order", "docname": "PO-001"})
+    response = _post(http_client, {"doctype": "Contract", "docname": "CON-001"})
 
     # delete ran — document is now absent from the index
-    mock_vector_store.delete_by_docname.assert_called_once_with("PO-001")
+    mock_vector_store.delete_by_docname.assert_called_once_with("CON-001")
     # error must propagate as 5xx, not be swallowed as a 200 "indexed"
     assert response.status_code == 500

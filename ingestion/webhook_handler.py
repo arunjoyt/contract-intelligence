@@ -29,33 +29,19 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from ingestion.chunker import Chunk, chunk_text
-from ingestion.document_parser import (
-    extract_text_from_html,
-    extract_text_from_pdf,
-    invoice_to_text,
-    po_to_text,
-    supplier_scorecard_to_text,
-)
+from ingestion.document_parser import extract_text_from_html, extract_text_from_pdf
 from ingestion.embedder import Embedder
 from ingestion.erpnext_client import ERPNextClient
 from retrieval.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_DOCTYPES = frozenset(
-    {
-        "Purchase Order",
-        "Purchase Invoice",
-        "Contract",
-        "Terms and Conditions",
-        "Supplier Scorecard",
-    }
-)
+SUPPORTED_DOCTYPES = frozenset({"Contract", "Terms and Conditions"})
 
 # Doctypes whose attached PDF files get extracted and indexed alongside the
 # parent document's own text (see docs/ARCHITECTURE.md "Document Indexing
 # Strategy" and issue #52).
-ATTACHMENT_DOCTYPES = frozenset({"Purchase Order", "Contract"})
+ATTACHMENT_DOCTYPES = frozenset({"Contract"})
 
 
 async def handle_webhook_request(
@@ -155,10 +141,10 @@ def _verify_signature(body: bytes, signature: str, secret: str) -> None:
 async def _fetch_supplier_group(client: ERPNextClient, supplier_name: str | None) -> str | None:
     """Fetch ``supplier_group`` from the Supplier record.
 
-    PO and Contract don't carry supplier_group directly — it lives on the
-    Supplier doctype and must be joined here (see ARCHITECTURE.md "Supplier
-    Metadata Enrichment"). Returns None silently on any lookup failure so a
-    bad/missing supplier record never blocks indexing.
+    Contract doesn't carry supplier_group directly — it lives on the Supplier
+    doctype and must be joined here (see ARCHITECTURE.md "Supplier Metadata
+    Enrichment"). Returns None silently on any lookup failure so a bad/missing
+    supplier record never blocks indexing.
     """
     if not supplier_name:
         return None
@@ -174,13 +160,11 @@ async def resolve_supplier_group(
 ) -> str | None:
     """Return ``supplier_group`` for ``doc``, joining via Supplier when needed.
 
-    Purchase Invoice carries `supplier_group` directly on the record; PO and
-    Contract don't and require a Supplier lookup (see ARCHITECTURE.md "Supplier
-    Metadata Enrichment"). Terms and Conditions has no supplier at all, so the
-    Supplier lookup below is skipped automatically (no `supplier`/`party_name`).
+    Contract doesn't carry supplier_group directly and requires a Supplier
+    lookup (see ARCHITECTURE.md "Supplier Metadata Enrichment"). Terms and
+    Conditions has no supplier at all, so the Supplier lookup below is skipped
+    automatically (no `supplier`/`party_name`).
     """
-    if doctype == "Purchase Invoice":
-        return doc.get("supplier_group")
     supplier_name = doc.get("supplier") or doc.get("party_name")
     return await _fetch_supplier_group(client, supplier_name)
 
@@ -197,8 +181,8 @@ async def gather_chunks_for_doc(
 
     All chunks share the same docname (the caller merges in `metadata` separately),
     so `chunk_index`/`total_chunks` are renumbered across the combined set — this
-    keeps `delete_by_docname` and reconstruction correct even when the parent doc's
-    own text is force_single_chunk and the attachments are split into many pieces.
+    keeps `delete_by_docname` and reconstruction correct even when the attachments
+    are split into many pieces.
     """
     chunks: list[Chunk] = chunk_text(text, force_single_chunk=force_single) if text.strip() else []
 
@@ -244,26 +228,9 @@ def prepare_doc_for_indexing(
 ) -> tuple[str, dict[str, Any], bool]:
     """Return ``(text, metadata, force_single_chunk)`` for the given doctype.
 
-    Structured docs (PO, Invoice, Scorecard) pass force_single_chunk=True so they
-    are never fragmented across vectors. Contract and Terms and Conditions are
-    unstructured HTML and split normally via RecursiveCharacterTextSplitter.
+    Contract and Terms and Conditions are unstructured HTML, always split
+    normally via RecursiveCharacterTextSplitter (force_single_chunk=False).
     """
-    if doctype == "Purchase Order":
-        return (
-            po_to_text(doc),
-            {
-                "source_doctype": "Purchase Order",
-                "docname": doc["name"],
-                "supplier": doc.get("supplier"),
-                "supplier_group": supplier_group,
-                "start_date": doc.get("transaction_date"),
-                "end_date": doc.get("schedule_date"),
-                "status": doc.get("status"),
-                "company": doc.get("company"),
-            },
-            True,
-        )
-
     if doctype == "Contract":
         text = extract_text_from_html(doc.get("contract_terms"))
         linked_doctype = doc.get("document_type")
@@ -288,53 +255,20 @@ def prepare_doc_for_indexing(
             False,
         )
 
-    if doctype == "Purchase Invoice":
-        return (
-            invoice_to_text(doc),
-            {
-                "source_doctype": "Purchase Invoice",
-                "docname": doc["name"],
-                "supplier": doc.get("supplier"),
-                "supplier_group": supplier_group,
-                "start_date": doc.get("posting_date"),
-                "end_date": doc.get("due_date"),
-                "status": doc.get("status"),
-                "company": doc.get("company"),
-            },
-            True,
-        )
-
-    if doctype == "Terms and Conditions":
-        # No supplier, company, or date-range fields on this doctype; "status" is
-        # derived from the `disabled` checkbox so status filters (e.g. "active")
-        # still work.
-        return (
-            extract_text_from_html(doc.get("terms")),
-            {
-                "source_doctype": "Terms and Conditions",
-                "docname": doc["name"],
-                "supplier": None,
-                "supplier_group": None,
-                "start_date": None,
-                "end_date": None,
-                "status": "Disabled" if doc.get("disabled") else "Active",
-                "company": None,
-            },
-            False,
-        )
-
-    # Supplier Scorecard — scorecards have no company or date range fields
+    # Terms and Conditions — no supplier, company, or date-range fields on this
+    # doctype; "status" is derived from the `disabled` checkbox so status
+    # filters (e.g. "active") still work.
     return (
-        supplier_scorecard_to_text(doc),
+        extract_text_from_html(doc.get("terms")),
         {
-            "source_doctype": "Supplier Scorecard",
+            "source_doctype": "Terms and Conditions",
             "docname": doc["name"],
-            "supplier": doc.get("supplier"),
-            "supplier_group": supplier_group,
+            "supplier": None,
+            "supplier_group": None,
             "start_date": None,
             "end_date": None,
-            "status": doc.get("status"),
+            "status": "Disabled" if doc.get("disabled") else "Active",
             "company": None,
         },
-        True,
+        False,
     )
