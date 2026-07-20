@@ -1,12 +1,8 @@
 """Text chunking for the ingestion pipeline.
 
-Unstructured documents (Contract, Terms and Conditions, attached PDFs) get split via
+Contract, Terms and Conditions, and their attached PDFs get split via
 `RecursiveCharacterTextSplitter` so each piece fits the embedding model's effective
-context. Structured documents (Purchase Order, Purchase Invoice, Supplier Scorecard)
-are short, single-vector NL strings from `document_parser.py` — they bypass splitting
-entirely via `force_single_chunk`, so a `PO` with an unusually long item list can never
-accidentally get fragmented across vectors (see docs/ARCHITECTURE.md "Document
-Indexing Strategy").
+context (see docs/ARCHITECTURE.md "Document Indexing Strategy").
 """
 
 from __future__ import annotations

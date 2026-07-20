@@ -47,13 +47,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 
 logger = logging.getLogger(__name__)
 
-_INGEST_DOCTYPES = (
-    "Purchase Order",
-    "Purchase Invoice",
-    "Contract",
-    "Terms and Conditions",
-    "Supplier Scorecard",
-)
+_INGEST_DOCTYPES = ("Contract", "Terms and Conditions")
 
 
 # ---------------------------------------------------------------------------
