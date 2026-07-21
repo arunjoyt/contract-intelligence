@@ -318,18 +318,18 @@ Create the following Webhook records in ERPNext desk (or via the REST API). For 
 
 | Webhook Name              | Doctype             | Event       | Why                                               |
 |---------------------------|---------------------|-------------|----------------------------------------------------|
-| `po-on-submit`            | Purchase Order      | `on_submit` | Index POs (and attached PDFs) when first submitted |
-| `po-on-cancel`            | Purchase Order      | `on_cancel` | Re-index with status=Cancelled when PO cancelled   |
-| `invoice-on-submit`       | Purchase Invoice    | `on_submit` | Index invoices when first submitted                |
-| `invoice-on-cancel`       | Purchase Invoice    | `on_cancel` | Re-index with status=Cancelled when invoice cancelled |
 | `contract-on-submit`      | Contract            | `on_submit` | Index contracts (and attached PDFs) when submitted |
 | `contract-on-update`      | Contract            | `on_update` | Re-index contracts saved/modified                  |
 | `terms-on-update`         | Terms and Conditions| `on_update` | Not submittable; update only                       |
-| `scorecard-on-update`     | Supplier Scorecard  | `on_update` | Scorecards are not submittable; update only        |
 
-> **Note:** `on_submit` is not valid for Supplier Scorecard or Terms and Conditions — neither is a submittable doctype in ERPNext.
+> **Note:** `on_submit` is not valid for Terms and Conditions — it is not a submittable doctype in ERPNext.
 
-> **Note:** `on_update_after_submit` for Purchase Orders is **not configured**. Investigation confirmed that Frappe 15 does not reliably fire this event via REST API or desk UI saves. See [Future Enhancements](#future-enhancements) below.
+> **Note:** `on_update_after_submit` is **not configured** for any doctype here. Investigation (against
+> Purchase Order, since removed from scope — see [Future Enhancements](#future-enhancements) below)
+> confirmed that Frappe 15 does not reliably fire this event via REST API or desk UI saves. This
+> platform limitation was only verified against Purchase Order; if edits to an already-submitted
+> Contract need to be re-indexed automatically, re-verify against Contract before assuming the same
+> gap applies.
 
 ### Via REST API (scripted setup)
 
@@ -342,14 +342,9 @@ SECRET = "<your WEBHOOK_SECRET>"
 URL = "http://127.0.0.1:8000/webhook/erpnext"
 
 WEBHOOKS = [
-    ("po-on-submit",       "Purchase Order",      "on_submit"),
-    ("po-on-cancel",       "Purchase Order",      "on_cancel"),
-    ("invoice-on-submit",  "Purchase Invoice",    "on_submit"),
-    ("invoice-on-cancel",  "Purchase Invoice",    "on_cancel"),
     ("contract-on-submit", "Contract",            "on_submit"),
     ("contract-on-update", "Contract",            "on_update"),
     ("terms-on-update",    "Terms and Conditions","on_update"),
-    ("scorecard-on-update","Supplier Scorecard",  "on_update"),
 ]
 
 WEBHOOK_JSON = '{"doctype": "{{ doc.doctype }}", "docname": "{{ doc.name }}"}'
@@ -577,20 +572,20 @@ docker compose exec app python3 -c "import urllib.request,json; req=urllib.reque
 
 **Check a specific document was indexed** (filter by `docname`):
 ```bash
-docker compose exec app python3 -c "import urllib.request,json; req=urllib.request.Request('http://qdrant:6333/collections/procurement/points/scroll', data=json.dumps({'filter':{'must':[{'key':'docname','match':{'value':'PO-2024-1892'}}]},'limit':10,'with_payload':True,'with_vector':False}).encode(), headers={'Content-Type':'application/json'}); print(json.dumps(json.load(urllib.request.urlopen(req))['result'], indent=2))"
+docker compose exec app python3 -c "import urllib.request,json; req=urllib.request.Request('http://qdrant:6333/collections/procurement/points/scroll', data=json.dumps({'filter':{'must':[{'key':'docname','match':{'value':'CON-2024-00042'}}]},'limit':10,'with_payload':True,'with_vector':False}).encode(), headers={'Content-Type':'application/json'}); print(json.dumps(json.load(urllib.request.urlopen(req))['result'], indent=2))"
 ```
-Replace `PO-2024-1892` with the docname you're checking for.
+Replace `CON-2024-00042` with the docname you're checking for.
 
-**Count points by doctype** (e.g. confirm all Purchase Orders got indexed):
+**Count points by doctype** (e.g. confirm all Contracts got indexed):
 ```bash
-docker compose exec app python3 -c "import urllib.request,json; req=urllib.request.Request('http://qdrant:6333/collections/procurement/points/count', data=json.dumps({'filter':{'must':[{'key':'source_doctype','match':{'value':'Purchase Order'}}]}}).encode(), headers={'Content-Type':'application/json'}); print(json.load(urllib.request.urlopen(req))['result'])"
+docker compose exec app python3 -c "import urllib.request,json; req=urllib.request.Request('http://qdrant:6333/collections/procurement/points/count', data=json.dumps({'filter':{'must':[{'key':'source_doctype','match':{'value':'Contract'}}]}}).encode(), headers={'Content-Type':'application/json'}); print(json.load(urllib.request.urlopen(req))['result'])"
 ```
-Swap `'Purchase Order'` for `Contract` / `Supplier Scorecard` / etc.
+Swap `'Contract'` for `'Terms and Conditions'`.
 
 **Delete all points for a docname** (manual cleanup — e.g. force a clean re-index of one document;
 mirrors what the webhook handler does automatically on `on_submit`/`on_update`):
 ```bash
-docker compose exec app python3 -c "import urllib.request,json; req=urllib.request.Request('http://qdrant:6333/collections/procurement/points/delete', data=json.dumps({'filter':{'must':[{'key':'docname','match':{'value':'PO-2024-1892'}}]}}).encode(), headers={'Content-Type':'application/json'}, method='POST'); print(json.load(urllib.request.urlopen(req))['result'])"
+docker compose exec app python3 -c "import urllib.request,json; req=urllib.request.Request('http://qdrant:6333/collections/procurement/points/delete', data=json.dumps({'filter':{'must':[{'key':'docname','match':{'value':'CON-2024-00042'}}]}}).encode(), headers={'Content-Type':'application/json'}, method='POST'); print(json.load(urllib.request.urlopen(req))['result'])"
 ```
 This is destructive for that docname's vectors — only use it if you intend to re-trigger indexing for
 it afterward (e.g. re-save/re-submit the doc in ERPNext, or re-run a full ingest).

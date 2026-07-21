@@ -157,13 +157,11 @@ ERPNext --REST API (full ingest) / Webhooks (incremental)--> Ingestion --> Qdran
 - **Frontend** (`frontend/app.py`): Streamlit chat UI with supplier/doctype/date/status filters in the
   sidebar; calls the API over `httpx`.
 
-### Indexing strategy — two distinct paths
+### Indexing strategy
 
-- **Structured docs** (Purchase Order, Purchase Invoice, Supplier Scorecard): serialized to a single
-  natural-language string and embedded as **one vector, no chunking** — relational fields must not be
-  fragmented across chunks.
-- **Unstructured docs** (Contract, Terms and Conditions, attached PDFs): HTML-stripped, then split via
-  `RecursiveCharacterTextSplitter`; each chunk carries `chunk_index`/`total_chunks` for reconstruction.
+Both ingested doctypes (Contract, Terms and Conditions, + Contract's attached PDFs) are unstructured
+text: HTML-stripped, then split via `RecursiveCharacterTextSplitter`; each chunk carries
+`chunk_index`/`total_chunks` for reconstruction.
 
 ### Qdrant payload & idempotency
 
@@ -174,8 +172,8 @@ Point ID is deterministic: `uuid5(NAMESPACE_DNS, f"{docname}:{chunk_index}")`. T
 
 ### Incremental indexing (webhooks)
 
-ERPNext fires webhooks on `on_submit`/`on_update`/`on_cancel` for `Purchase Order`, `Purchase Invoice`,
-`Contract`, `Terms and Conditions`, `Supplier Scorecard`. The handler: verify `X-Frappe-Webhook-Signature`
+ERPNext fires webhooks on `on_submit`/`on_update`/`on_cancel` for `Contract` and `Terms and Conditions`.
+The handler: verify `X-Frappe-Webhook-Signature`
 (HMAC-SHA256) → fetch full doc via `ERPNextClient` → `delete_by_docname` → re-run parse → chunk → embed →
 upsert → rebuild BM25 index. No full re-index is needed for routine updates.
 

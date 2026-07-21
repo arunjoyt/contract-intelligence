@@ -213,10 +213,7 @@ See `.env.example` for the full list with generation instructions. Key groups:
 
 | Doctype | Indexing type | Notes |
 |---|---|---|
-| Purchase Order | Structured → natural language | Serialized fields: supplier, items, rate, dates, status |
 | Contract | Unstructured chunks | `contract_terms` HTML stripped before chunking |
-| Supplier Scorecard | Structured → natural language | Scoring criteria and standing |
-| Purchase Invoice | Structured → natural language | Payment terms, outstanding amounts |
 | Terms and Conditions | Unstructured chunks | Template text |
 | Attached PDFs | Unstructured chunks | Extracted via Frappe File API |
 
