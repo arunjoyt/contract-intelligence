@@ -1,7 +1,7 @@
 """Query rewriting for the retrieval pipeline.
 
 Two strategies, controlled by the QUERY_REWRITE_STRATEGY env var:
-- 'hyde' (default): Prompt GPT-4o to write a hypothetical procurement
+- 'hyde' (default): Prompt GPT-4o to write a hypothetical contract
   document that would answer the question, then embed that document.
   Improves recall by searching in answer-space rather than query-space.
 - 'step_back': Prompt GPT-4o to rewrite the question at a higher
@@ -18,16 +18,16 @@ from config import OPENAI_MODEL
 from ingestion.embedder import Embedder
 
 _HYDE_SYSTEM = (
-    "You are a procurement document generator. "
-    "Given a user question, write a short hypothetical procurement document "
+    "You are a contract document generator. "
+    "Given a user question, write a short hypothetical contract document "
     "(a Contract or Terms and Conditions document) that would directly "
     "answer the question. Be concise — 3–6 sentences maximum."
 )
 
 _STEP_BACK_SYSTEM = (
-    "You are a procurement expert. "
+    "You are a contract expert. "
     "Rewrite the following question at a higher abstraction level, "
-    "focusing on the procurement concept rather than specific details. "
+    "focusing on the contract concept rather than specific details. "
     "Return only the rewritten question, nothing else."
 )
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The procurement RAG system is deployed alongside ERPNext, with access restricted to specific roles (`Purchase Manager`, `Purchase User`, `Accounts User`, `System Manager`). Two deployment options are available — choose based on your ERPNext hosting type.
+The Contract Intelligence system is deployed alongside ERPNext, with access restricted to specific roles (`Purchase Manager`, `Purchase User`, `Accounts User`, `System Manager`). Two deployment options are available — choose based on your ERPNext hosting type.
 
 | | Option A: Frappe App | Option B: Standalone + OAuth2 |
 |---|---|---|
@@ -18,24 +18,24 @@ The procurement RAG system is deployed alongside ERPNext, with access restricted
 
 ### How It Works
 
-A lightweight Frappe app (`procurement_rag`) is installed on the ERPNext site. It adds a **Workspace shortcut and Desk Page** visible only to the allowed roles — controlled via Frappe's standard Role Permissions Manager. The page contains a chat widget that calls a **whitelisted Python method** server-side, which enforces the role check and proxies the query to the FastAPI backend over the private network.
+A lightweight Frappe app (`contract_intelligence`) is installed on the ERPNext site. It adds a **Workspace shortcut and Desk Page** visible only to the allowed roles — controlled via Frappe's standard Role Permissions Manager. The page contains a chat widget that calls a **whitelisted Python method** server-side, which enforces the role check and proxies the query to the FastAPI backend over the private network.
 
 The FastAPI RAG backend still runs as a separate Docker Compose service. The Frappe app is only the UI and auth layer.
 
 ### ERPNext Setup
 
-1. `bench get-app https://github.com/your-org/procurement_rag`
-2. `bench --site erp.example.com install-app procurement_rag`
+1. `bench get-app https://github.com/your-org/contract_intelligence`
+2. `bench --site erp.example.com install-app contract_intelligence`
 3. `bench --site erp.example.com migrate`
-4. In ERPNext desk: **Role Permissions Manager** → set Page `Procurement Intelligence` visible to `Purchase Manager`, `Purchase User`, `Accounts User`, `System Manager`
+4. In ERPNext desk: **Role Permissions Manager** → set Page `Contract Intelligence` visible to `Purchase Manager`, `Purchase User`, `Accounts User`, `System Manager`
 
 > On **Frappe Cloud**: custom app installation is available on Business / Unlimited plans. On ERPNext SaaS (erpnext.com), use Option B instead.
 
 ### Auth Flow
 
 1. User is already logged into ERPNext desk — no separate login required
-2. User opens the "Procurement Intelligence" Workspace item (hidden from all other roles)
-3. The Desk Page calls `frappe.call('procurement_rag.api.query', {question: ...})`
+2. User opens the "Contract Intelligence" Workspace item (hidden from all other roles)
+3. The Desk Page calls `frappe.call('contract_intelligence.api.query', {question: ...})`
 4. The whitelisted method runs inside the bench process; `frappe.session.user` is already resolved
 5. Method checks allowed roles: `if not any(r in frappe.get_roles() for r in ALLOWED_ROLES): raise frappe.PermissionError`
 6. If authorized, method calls `http://127.0.0.1:8000/query` with a short-lived HMAC token (`HMAC-SHA256(username + timestamp, INTERNAL_TOKEN_SECRET)`, 30s TTL)
@@ -46,17 +46,17 @@ The FastAPI RAG backend still runs as a separate Docker Compose service. The Fra
 
 **Frappe app (separate repository):**
 ```
-apps/procurement_rag/
-├── procurement_rag/
+apps/contract_intelligence/
+├── contract_intelligence/
 │   ├── hooks.py                    # app metadata, workspace registration
 │   ├── api.py                      # @frappe.whitelist() def query(question, filters)
 │   │                               #   → role check → HMAC token → POST 127.0.0.1:8000/query
 │   └── public/js/
-│       └── procurement_chat.js     # chat widget embedded in the Desk Page
+│       └── contract_chat.js        # chat widget embedded in the Desk Page
 └── setup.py
 ```
 
-**Inside `procurement-rag` project:**
+**Inside `contract-intelligence` project:**
 ```
 api/
 └── auth/
@@ -101,7 +101,7 @@ http://127.0.0.1:8000/webhook/erpnext
 ### Verification
 
 1. `docker compose up -d` — FastAPI starts, bound to `127.0.0.1:8000`
-2. Log into ERPNext desk as `Purchase Manager` — "Procurement Intelligence" Workspace item is visible
+2. Log into ERPNext desk as `Purchase Manager` — "Contract Intelligence" Workspace item is visible
 3. Log in as a user with no allowed role — Workspace item is hidden; direct `frappe.call` raises `PermissionError`
 4. Submit a query from the desk page — answer and sources returned
 5. `curl http://server-ip:8000/query` from outside — connection refused (loopback binding)
@@ -122,20 +122,20 @@ OAuth2 is built into Frappe — no custom app needed:
 
 1. Go to ERPNext desk → **Integrations → OAuth Client**
 2. Create a new OAuth2 client
-3. Set **Redirect URI** to `https://api.procurement-rag.example.com/auth/callback` (the API domain —
+3. Set **Redirect URI** to `https://api.contract-intelligence.example.com/auth/callback` (the API domain —
    `/auth/callback` is a FastAPI route, not served by the Streamlit frontend)
 4. Note the generated `client_id` and `client_secret`
 
 ### Auth Flow
 
-1. User navigates to `https://procurement-rag.example.com` — sees a **"Login with ERPNext"** button
+1. User navigates to `https://contract-intelligence.example.com` — sees a **"Login with ERPNext"** button
 2. Clicking redirects to:
    ```
    {ERPNEXT_URL}/api/method/frappe.integrations.oauth2.authorize
      ?client_id=...&redirect_uri=...&response_type=code&code_challenge=...&scope=openid+all
    ```
 3. User logs in on the ERPNext site — the RAG app never sees the password
-4. ERPNext redirects back to `https://api.procurement-rag.example.com/auth/callback?code=...`
+4. ERPNext redirects back to `https://api.contract-intelligence.example.com/auth/callback?code=...`
 5. FastAPI exchanges the code for an access token via `POST {ERPNEXT_URL}/api/method/frappe.integrations.oauth2.get_token`
 6. FastAPI resolves the user's roles in three steps (`fetch_user_roles()` in `api/auth/oauth2.py`):
    a. verifies identity with the OAuth access token via `GET .../oauth2.openid_profile` (email from
@@ -194,7 +194,7 @@ Key additions to `api/main.py`: mount `auth_router`; apply `require_allowed_role
 # OAuth2 client — created in ERPNext desk → Integrations → OAuth Client
 ERPNEXT_OAUTH_CLIENT_ID=<from ERPNext>
 ERPNEXT_OAUTH_CLIENT_SECRET=<from ERPNext>
-OAUTH_REDIRECT_URI=https://api.procurement-rag.example.com/auth/callback
+OAUTH_REDIRECT_URI=https://api.contract-intelligence.example.com/auth/callback
 
 # JWT session
 JWT_SECRET=<random 256-bit hex>
@@ -214,8 +214,8 @@ OAuth Bearer token doesn't have resource-API read access to it.
 ```
 Internet (443/80)
     └── Nginx
-          ├── procurement-rag.example.com     → Streamlit  (internal: 8501)
-          └── api.procurement-rag.example.com → FastAPI    (internal: 8000)
+          ├── contract-intelligence.example.com     → Streamlit  (internal: 8501)
+          └── api.contract-intelligence.example.com → FastAPI    (internal: 8000)
                   [Docker network: rag_internal — no external routing]
                   ├── Qdrant    (6333, private)
                   └── Langfuse  (3000, private)
@@ -223,7 +223,7 @@ Internet (443/80)
 
 ERPNext cloud instance
     └── Called by FastAPI during /auth/callback (token exchange + role fetch)
-    └── Sends webhooks to https://api.procurement-rag.example.com/webhook/erpnext
+    └── Sends webhooks to https://api.contract-intelligence.example.com/webhook/erpnext
 ```
 
 **`docker-compose.yml` for Option B** (see the actual file at repo root — this is a summary, not a
@@ -261,7 +261,7 @@ services:
 
 **Nginx configuration notes:**
 - Domains are set once via `FRONTEND_DOMAIN`/`API_DOMAIN` in `.env` — substituted into nginx's
-  config automatically at container start (`nginx/templates/procurement-rag.conf.template`), no
+  config automatically at container start (`nginx/templates/contract-intelligence.conf.template`), no
   manual editing of `nginx.conf` required
 - The port-80 redirect block is marked `default_server` — without it, the base `nginx:alpine`
   image's own leftover `/etc/nginx/conf.d/default.conf` (a stock "Welcome to nginx" page,
@@ -274,16 +274,16 @@ services:
 
 **ERPNext webhook URL:**
 ```
-https://api.procurement-rag.example.com/webhook/erpnext
+https://api.contract-intelligence.example.com/webhook/erpnext
 ```
 
 ### Verification
 
 1. `docker compose up -d` — all services start; nginx on 443
-2. `https://procurement-rag.example.com` — "Login with ERPNext" button visible
+2. `https://contract-intelligence.example.com` — "Login with ERPNext" button visible
 3. Click → redirected to ERPNext login → log in as `Purchase Manager` → redirected back to chat UI
 4. Repeat with a user outside allowed roles → `403 Access Denied`
-5. Submit a procurement query → answer with source citations returned
+5. Submit a contract query → answer with source citations returned
 6. Set `JWT_EXPIRY_HOURS=0` temporarily → next request redirects back to login
 7. Trigger ERPNext webhook → document re-indexed; updated answer returned
 8. `POST /query` with no `Authorization` header → `401 Unauthorized`
@@ -298,7 +298,7 @@ This is a **one-time ERPNext configuration** required for incremental re-indexin
 ### Required webhook records
 
 Create the following Webhook records in ERPNext desk (or via the REST API). For each one:
-- **Request URL**: `http://127.0.0.1:8000/webhook/erpnext` (Option A / local) or `https://api.procurement-rag.example.com/webhook/erpnext` (Option B / prod)
+- **Request URL**: `http://127.0.0.1:8000/webhook/erpnext` (Option A / local) or `https://api.contract-intelligence.example.com/webhook/erpnext` (Option B / prod)
 - **Request Method**: POST
 - **Request Structure**: JSON
 - **Enable Security**: must be checked. Without it, Frappe never sends the
@@ -423,8 +423,8 @@ individually; that is a larger lift than a single `docker compose up -d` and is 
 
 Create two `A` records pointing at the Elastic IP:
 ```
-procurement-rag.<yourdomain>      → Elastic IP
-api.procurement-rag.<yourdomain>  → Elastic IP
+contract-intelligence.<yourdomain>      → Elastic IP
+api.contract-intelligence.<yourdomain>  → Elastic IP
 ```
 Wait for propagation before running certbot — it validates ownership via HTTP-01 on port 80.
 
@@ -440,7 +440,7 @@ sudo apt install -y docker-compose-plugin certbot
 ### 4. Get the code + secrets onto the box
 
 ```bash
-git clone <your-repo-url> procurement-rag && cd procurement-rag
+git clone <your-repo-url> contract-intelligence && cd contract-intelligence
 cp .env.example .env
 ```
 
@@ -454,15 +454,15 @@ ERPNEXT_URL=https://<your-existing-erpnext-host>
 ERPNEXT_API_KEY=...
 ERPNEXT_API_SECRET=...
 OPENAI_API_KEY=...
-OAUTH_REDIRECT_URI=https://api.procurement-rag.<yourdomain>/auth/callback
-FRONTEND_URL=https://procurement-rag.<yourdomain>
-PUBLIC_API_URL=https://api.procurement-rag.<yourdomain>
-FRONTEND_DOMAIN=procurement-rag.<yourdomain>
-API_DOMAIN=api.procurement-rag.<yourdomain>
+OAUTH_REDIRECT_URI=https://api.contract-intelligence.<yourdomain>/auth/callback
+FRONTEND_URL=https://contract-intelligence.<yourdomain>
+PUBLIC_API_URL=https://api.contract-intelligence.<yourdomain>
+FRONTEND_DOMAIN=contract-intelligence.<yourdomain>
+API_DOMAIN=api.contract-intelligence.<yourdomain>
 ```
 
 `FRONTEND_DOMAIN`/`API_DOMAIN` (bare hostnames, no scheme) drive nginx's config — they're
-substituted into `nginx/templates/procurement-rag.conf.template` automatically on every container
+substituted into `nginx/templates/contract-intelligence.conf.template` automatically on every container
 start, so `nginx/nginx.conf` never needs manual editing and survives `git pull` cleanly.
 
 Since ERPNext is a separate/existing server, confirm it's reachable from the EC2 box
@@ -473,16 +473,16 @@ network or localhost, that's the one networking gap to close first.
 
 ```bash
 sudo certbot certonly --standalone \
-  -d procurement-rag.<yourdomain> \
-  -d api.procurement-rag.<yourdomain>
+  -d contract-intelligence.<yourdomain> \
+  -d api.contract-intelligence.<yourdomain>
 ```
 
 ### 6. ERPNext-side config (on the existing ERPNext server)
 
 - **Integrations → OAuth Client**: update Redirect URI to
-  `https://api.procurement-rag.<yourdomain>/auth/callback`.
+  `https://api.contract-intelligence.<yourdomain>/auth/callback`.
 - **Webhook records**: update each `request_url` to
-  `https://api.procurement-rag.<yourdomain>/webhook/erpnext` (see the webhook table earlier in this
+  `https://api.contract-intelligence.<yourdomain>/webhook/erpnext` (see the webhook table earlier in this
   document).
 
 ### 7. Launch
@@ -498,7 +498,7 @@ Webhooks only cover documents created/changed *after* they're wired up — exist
 needs one manual full re-index:
 
 ```bash
-curl -X POST https://api.procurement-rag.<yourdomain>/ingest/full \
+curl -X POST https://api.contract-intelligence.<yourdomain>/ingest/full \
   -H "X-Admin-Secret: <your ADMIN_SECRET from .env>"
 ```
 Runs as a background task; watch progress with `docker compose logs app -f` on the instance.
@@ -506,10 +506,10 @@ Runs as a background task; watch progress with `docker compose logs app -f` on t
 ### 9. Verify
 
 ```bash
-curl https://api.procurement-rag.<yourdomain>/health
+curl https://api.contract-intelligence.<yourdomain>/health
 curl -I https://<elastic-ip>:6333   # should fail/timeout — not publicly reachable
 ```
-Then in a browser: `https://procurement-rag.<yourdomain>` → **Login with ERPNext** → sign in as
+Then in a browser: `https://contract-intelligence.<yourdomain>` → **Login with ERPNext** → sign in as
 `Purchase Manager` → run a query and confirm citations come back. Trigger a real ERPNext webhook (e.g.
 submit a PO) and confirm it re-indexes.
 
@@ -534,7 +534,7 @@ submit a PO) and confirm it re-indexes.
 Qdrant ships a built-in web dashboard (`/dashboard`) on its API port, and `docker-compose.yml` binds that
 port to `127.0.0.1` on the host — reachable via SSH tunnel, same as Langfuse (§12), never from the public
 internet. `curl` also isn't installed in the `app` image (`python:3.11-slim`), so the API examples below
-use Python's own `urllib` from inside the container instead. Replace `procurement` with your
+use Python's own `urllib` from inside the container instead. Replace `contract` with your
 `QDRANT_COLLECTION` value if it differs.
 
 #### Browsing the Qdrant dashboard (SSH tunnel)
@@ -554,12 +554,12 @@ schema are browsable with no login (Qdrant has no built-in auth unless `QDRANT_A
 
 **Collection info (point count, vector config, status):**
 ```bash
-docker compose exec app python3 -c "import urllib.request,json; print(json.dumps(json.load(urllib.request.urlopen('http://qdrant:6333/collections/procurement'))['result'], indent=2))"
+docker compose exec app python3 -c "import urllib.request,json; print(json.dumps(json.load(urllib.request.urlopen('http://qdrant:6333/collections/contract'))['result'], indent=2))"
 ```
 
 **Just the point count** (handy to poll during/after a full ingest — see if it's climbing):
 ```bash
-docker compose exec app python3 -c "import urllib.request,json; print(json.load(urllib.request.urlopen('http://qdrant:6333/collections/procurement'))['result']['points_count'])"
+docker compose exec app python3 -c "import urllib.request,json; print(json.load(urllib.request.urlopen('http://qdrant:6333/collections/contract'))['result']['points_count'])"
 ```
 
 **List all collections:**
@@ -569,25 +569,25 @@ docker compose exec app python3 -c "import urllib.request,json; print(json.dumps
 
 **Sample a few points** (inspect payload shape — `source_doctype`, `docname`, `supplier`, etc.):
 ```bash
-docker compose exec app python3 -c "import urllib.request,json; req=urllib.request.Request('http://qdrant:6333/collections/procurement/points/scroll', data=json.dumps({'limit':5,'with_payload':True,'with_vector':False}).encode(), headers={'Content-Type':'application/json'}); print(json.dumps(json.load(urllib.request.urlopen(req))['result'], indent=2))"
+docker compose exec app python3 -c "import urllib.request,json; req=urllib.request.Request('http://qdrant:6333/collections/contract/points/scroll', data=json.dumps({'limit':5,'with_payload':True,'with_vector':False}).encode(), headers={'Content-Type':'application/json'}); print(json.dumps(json.load(urllib.request.urlopen(req))['result'], indent=2))"
 ```
 
 **Check a specific document was indexed** (filter by `docname`):
 ```bash
-docker compose exec app python3 -c "import urllib.request,json; req=urllib.request.Request('http://qdrant:6333/collections/procurement/points/scroll', data=json.dumps({'filter':{'must':[{'key':'docname','match':{'value':'CON-2024-00042'}}]},'limit':10,'with_payload':True,'with_vector':False}).encode(), headers={'Content-Type':'application/json'}); print(json.dumps(json.load(urllib.request.urlopen(req))['result'], indent=2))"
+docker compose exec app python3 -c "import urllib.request,json; req=urllib.request.Request('http://qdrant:6333/collections/contract/points/scroll', data=json.dumps({'filter':{'must':[{'key':'docname','match':{'value':'CON-2024-00042'}}]},'limit':10,'with_payload':True,'with_vector':False}).encode(), headers={'Content-Type':'application/json'}); print(json.dumps(json.load(urllib.request.urlopen(req))['result'], indent=2))"
 ```
 Replace `CON-2024-00042` with the docname you're checking for.
 
 **Count points by doctype** (e.g. confirm all Contracts got indexed):
 ```bash
-docker compose exec app python3 -c "import urllib.request,json; req=urllib.request.Request('http://qdrant:6333/collections/procurement/points/count', data=json.dumps({'filter':{'must':[{'key':'source_doctype','match':{'value':'Contract'}}]}}).encode(), headers={'Content-Type':'application/json'}); print(json.load(urllib.request.urlopen(req))['result'])"
+docker compose exec app python3 -c "import urllib.request,json; req=urllib.request.Request('http://qdrant:6333/collections/contract/points/count', data=json.dumps({'filter':{'must':[{'key':'source_doctype','match':{'value':'Contract'}}]}}).encode(), headers={'Content-Type':'application/json'}); print(json.load(urllib.request.urlopen(req))['result'])"
 ```
 Swap `'Contract'` for `'Terms and Conditions'`.
 
 **Delete all points for a docname** (manual cleanup — e.g. force a clean re-index of one document;
 mirrors what the webhook handler does automatically on `on_submit`/`on_update`):
 ```bash
-docker compose exec app python3 -c "import urllib.request,json; req=urllib.request.Request('http://qdrant:6333/collections/procurement/points/delete', data=json.dumps({'filter':{'must':[{'key':'docname','match':{'value':'CON-2024-00042'}}]}}).encode(), headers={'Content-Type':'application/json'}, method='POST'); print(json.load(urllib.request.urlopen(req))['result'])"
+docker compose exec app python3 -c "import urllib.request,json; req=urllib.request.Request('http://qdrant:6333/collections/contract/points/delete', data=json.dumps({'filter':{'must':[{'key':'docname','match':{'value':'CON-2024-00042'}}]}}).encode(), headers={'Content-Type':'application/json'}, method='POST'); print(json.load(urllib.request.urlopen(req))['result'])"
 ```
 This is destructive for that docname's vectors — only use it if you intend to re-trigger indexing for
 it afterward (e.g. re-save/re-submit the doc in ERPNext, or re-run a full ingest).

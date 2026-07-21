@@ -31,7 +31,7 @@ Group 7 tests Langfuse observability end-to-end (see docs/ARCHITECTURE.md § Obs
 Services needed: Qdrant + OpenAI + a live Langfuse server (LANGFUSE_PUBLIC_KEY,
 LANGFUSE_SECRET_KEY, LANGFUSE_HOST in .env).
 
-A dedicated Qdrant collection (procurement_integration_test) is created at
+A dedicated Qdrant collection (contract_integration_test) is created at
 session start and deleted on teardown — the production collection is untouched.
 """
 
@@ -83,7 +83,7 @@ def _integration_auth_headers() -> dict[str, str]:
 # Shared test collection — isolated from production data
 # ---------------------------------------------------------------------------
 
-TEST_COLLECTION = "procurement_integration_test"
+TEST_COLLECTION = "contract_integration_test"
 
 # ---------------------------------------------------------------------------
 # Session-scoped fixtures
@@ -543,7 +543,7 @@ async def test_query_pipeline_respects_supplier_filter(embedder, vs) -> None:
 async def test_query_pipeline_refuses_to_hallucinate_when_no_context(embedder, vs) -> None:
     """GPT-4o must not fabricate an answer when the context has nothing relevant.
 
-    The test collection contains procurement documents.  A question with zero
+    The test collection contains contract documents.  A question with zero
     overlap with those documents should trigger the exact fallback phrase from
     the system prompt rather than a hallucinated answer.
     """
@@ -603,7 +603,7 @@ async def test_hyde_and_step_back_strategies_both_return_answers(embedder, vs) -
 
 _G4_APP_URL = os.getenv("API_URL", "http://localhost:8000")
 _G4_QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
-_G4_COLLECTION = os.getenv("QDRANT_COLLECTION", "procurement")
+_G4_COLLECTION = os.getenv("QDRANT_COLLECTION", "contract")
 
 
 def _g4_collection_count() -> int:

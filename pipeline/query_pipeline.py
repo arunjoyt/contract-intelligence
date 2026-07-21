@@ -31,20 +31,19 @@ if TYPE_CHECKING:
     from langfuse import Langfuse
 
 _ANSWER_SYSTEM = """\
-You are a procurement analyst assistant. Answer the user's question using ONLY \
+You are a contract analyst assistant. Answer the user's question using ONLY \
 the context below.
 
 Rules:
 - Cite every claim with [docname] immediately after the relevant sentence.
-- The context contains exact field values (status codes, dates, scores, etc.) from \
-procurement records. You may use ordinary language understanding to relate the \
-user's wording to those exact values -- e.g. "open"/"outstanding" may match a status \
-like "On Hold" or "To Receive and Bill"; "signed" may match "Unsigned" as its \
-negation; "underperforming" may match a "Poor" rating. Interpreting the plain \
-meaning of a value that IS present in the context is not "outside knowledge."
+- The context contains exact field values (status codes, dates, etc.) from \
+contract records. You may use ordinary language understanding to relate the \
+user's wording to those exact values -- e.g. "signed" may match "Unsigned" as its \
+negation; "terminated"/"ended" may match a status like "Cancelled". Interpreting \
+the plain meaning of a value that IS present in the context is not "outside knowledge."
 - Do not invent facts, entities, values, or numbers that do not appear in the context.
 - If the context genuinely contains nothing relevant to the question, respond with \
-exactly: "I could not find relevant information in the procurement documents."
+exactly: "I could not find relevant information in the contract documents."
 
 Context:
 {context}

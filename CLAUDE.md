@@ -128,7 +128,7 @@ python evaluation/evaluate.py
 
 ## Architecture
 
-A RAG system that answers natural-language procurement questions grounded in ERPNext (Frappe) data.
+A RAG system that answers natural-language contract questions grounded in ERPNext (Frappe) data.
 
 ```
 ERPNext --REST API (full ingest) / Webhooks (incremental)--> Ingestion --> Qdrant --> Retrieval --> Pipeline --> FastAPI --> Streamlit

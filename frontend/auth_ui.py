@@ -22,8 +22,8 @@ def handle_token_from_url() -> None:
 
 
 def show_login_page() -> None:
-    st.title("Procurement Intelligence")
-    st.markdown("Sign in with your ERPNext account to access procurement data.")
+    st.title("Contract Intelligence")
+    st.markdown("Sign in with your ERPNext account to access contract data.")
     login_url = f"{_PUBLIC_API_URL}/auth/login"
     st.markdown(
         f'<a href="{login_url}" target="_self" style="text-decoration:none;">'

@@ -1,4 +1,4 @@
-"""FastAPI application — procurement RAG API.
+"""FastAPI application — Contract Intelligence RAG API.
 
 Endpoints
 ---------
@@ -115,7 +115,7 @@ async def _lifespan(app: FastAPI):
 # App
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="Procurement RAG API", lifespan=_lifespan)
+app = FastAPI(title="Contract Intelligence API", lifespan=_lifespan)
 app.include_router(auth_router)
 
 
