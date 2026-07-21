@@ -9,7 +9,7 @@
 services:
   app:
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       # host.docker.internal resolves to the Mac host — lets the container reach
       # a locally running ERPNext instance (127.0.0.1 is loopback-only inside Docker).
@@ -17,14 +17,14 @@ services:
 
   frontend:
     ports:
-      - "8501:8501"
+      - "127.0.0.1:8501:8501"
 
   qdrant:
     ports:
       # 6333 is already published (loopback-only) by docker-compose.yml; adding it
       # again here would create a conflicting duplicate bind on the same host port
       # and Docker silently drops both. Only publish the extra gRPC port here.
-      - "6334:6334"
+      - "127.0.0.1:6334:6334"
 
   langfuse:
     ports:
