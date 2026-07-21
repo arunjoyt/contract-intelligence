@@ -172,6 +172,25 @@ def test_contract_indexed_with_correct_metadata(
     assert c["end_date"] == "2025-01-01"
 
 
+def test_cancelled_contract_gets_cancelled_status_override(
+    http_client: TestClient,
+    mock_erpnext: AsyncMock,
+    mock_vector_store: MagicMock,
+) -> None:
+    """Contract's own `status` field has no Cancelled option (only Unsigned/Active/
+    Inactive) -- docstatus=2 must override it so a "cancelled" status filter can
+    actually match (see issue #76)."""
+    mock_erpnext.get_doc.side_effect = [
+        {**CONTRACT_DOC, "docstatus": 2},
+        CONTRACT_SUPPLIER_DOC,
+    ]
+
+    _post(http_client, {"doctype": "Contract", "docname": "CON-001"})
+
+    chunks = mock_vector_store.upsert_chunks.call_args[0][0]
+    assert chunks[0]["status"] == "Cancelled"
+
+
 def test_contract_html_is_stripped_before_embedding(
     http_client: TestClient, mock_erpnext: AsyncMock, mock_embedder: MagicMock
 ) -> None:

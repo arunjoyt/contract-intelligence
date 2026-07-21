@@ -238,6 +238,12 @@ def prepare_doc_for_indexing(
         if linked_doctype and linked_docname:
             linked_sentence = f"This contract is linked to {linked_doctype} {linked_docname}."
             text = f"{linked_sentence} {text}".strip()
+        # Contract's own `status` field only ever holds Unsigned/Active/Inactive --
+        # it has no Cancelled option. Cancellation is tracked separately via
+        # docstatus (2 = cancelled), so override status here rather than expose
+        # a stale pre-cancellation value that would never match a "cancelled"
+        # status filter (see issue #76).
+        status = "Cancelled" if doc.get("docstatus") == 2 else doc.get("status")
         return (
             text,
             {
@@ -247,7 +253,7 @@ def prepare_doc_for_indexing(
                 "supplier_group": supplier_group,
                 "start_date": doc.get("start_date"),
                 "end_date": doc.get("end_date"),
-                "status": doc.get("status"),
+                "status": status,
                 "company": doc.get("company"),
                 "linked_doctype": linked_doctype,
                 "linked_docname": linked_docname,

@@ -320,6 +320,7 @@ Create the following Webhook records in ERPNext desk (or via the REST API). For 
 |---------------------------|---------------------|-------------|----------------------------------------------------|
 | `contract-on-submit`      | Contract            | `on_submit` | Index contracts (and attached PDFs) when submitted |
 | `contract-on-update`      | Contract            | `on_update` | Re-index contracts saved/modified                  |
+| `contract-on-cancel`      | Contract            | `on_cancel` | Re-index with status=Cancelled when cancelled      |
 | `terms-on-update`         | Terms and Conditions| `on_update` | Not submittable; update only                       |
 
 > **Note:** `on_submit` is not valid for Terms and Conditions — it is not a submittable doctype in ERPNext.
@@ -344,6 +345,7 @@ URL = "http://127.0.0.1:8000/webhook/erpnext"
 WEBHOOKS = [
     ("contract-on-submit", "Contract",            "on_submit"),
     ("contract-on-update", "Contract",            "on_update"),
+    ("contract-on-cancel", "Contract",            "on_cancel"),
     ("terms-on-update",    "Terms and Conditions","on_update"),
 ]
 
