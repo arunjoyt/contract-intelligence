@@ -116,17 +116,7 @@ For the concrete steps to switch provider with today's codebase as-is (no adapte
 
 ## Document Indexing Strategy
 
-### Structured documents (PO, Invoice, Scorecard)
-
-Serialized to a single natural-language string before embedding. No chunking — the entire doc is one vector. This avoids fragmenting relational fields across chunks.
-
-```
-Purchase Order PO-2024-00123 issued to Vendor ABC on 2024-03-15.
-Total value: 45,000 USD. Delivery expected by 2024-04-10.
-Items: Steel Pipes, Welding Rods. Payment terms: Net 30. Status: Submitted.
-```
-
-### Unstructured documents (Contract, T&C, PDFs)
+Both ingested doctypes (Contract, Terms and Conditions) are unstructured text, chunked the same way:
 
 - HTML stripped via BeautifulSoup before chunking
 - `RecursiveCharacterTextSplitter`: `chunk_size=512`, `chunk_overlap=64`
@@ -134,24 +124,23 @@ Items: Steel Pipes, Welding Rods. Payment terms: Net 30. Status: Submitted.
 
 ### PDF attachments
 
-`Purchase Order` and `Contract` documents may carry attached PDFs (e.g. signed contract scans,
-invoice PDFs). For these two doctypes, `erpnext_client.get_attached_files()` lists the document's
-`File` records, `.pdf`-named ones are downloaded via `get_file_content()`, and their text is
-extracted via `extract_text_from_pdf()`. The extracted text is chunked the same way as any other
-unstructured text and indexed as **additional points under the same `docname`** as the parent
-document — `chunk_index`/`total_chunks` are renumbered across the combined set (parent text +
-attachments) so `delete_by_docname` and reconstruction stay correct. A failure to list attachments
-or extract one PDF's text is logged and skipped; it never blocks indexing of the parent document or
-other attachments.
+`Contract` documents may carry attached PDFs (e.g. signed contract scans). For this doctype,
+`erpnext_client.get_attached_files()` lists the document's `File` records, `.pdf`-named ones are
+downloaded via `get_file_content()`, and their text is extracted via `extract_text_from_pdf()`. The
+extracted text is chunked the same way as any other unstructured text and indexed as **additional
+points under the same `docname`** as the parent document — `chunk_index`/`total_chunks` are
+renumbered across the combined set (parent text + attachments) so `delete_by_docname` and
+reconstruction stay correct. A failure to list attachments or extract one PDF's text is logged and
+skipped; it never blocks indexing of the parent document or other attachments.
 
 ### Supplier Metadata Enrichment
 
-`supplier_group` (used in the payload schema and as a filter field) is **not** present on `Purchase
-Order` records — it only exists on `Supplier` (and is, separately, already a direct field on
-`Purchase Invoice`). For `Purchase Order` and `Contract`, `ingestion/webhook_handler.py`'s
+`supplier_group` (used in the payload schema and as a filter field) is **not** present on `Contract`
+records directly — it only exists on `Supplier`. `ingestion/webhook_handler.py`'s
 `resolve_supplier_group()`/`_fetch_supplier_group()` fetch the `Supplier` record and join
 `supplier_group` onto the metadata dict built in `prepare_doc_for_indexing()` — this fetch is **not
-cached**; it hits ERPNext fresh on every call.
+cached**; it hits ERPNext fresh on every call. `Terms and Conditions` has no supplier field, so this
+lookup naturally no-ops for it.
 
 ### Qdrant Payload Schema
 
@@ -180,9 +169,9 @@ Point ID is derived as `uuid5(NAMESPACE_DNS, f"{docname}:{chunk_index}")` — de
 
 `Contract` carries two additional, optional payload fields — `linked_doctype`/`linked_docname` — populated from
 the doctype's `document_type`/`document_name` Dynamic Link pair when the contract references a specific
-transaction document (e.g. a Purchase Order). A matching sentence ("This contract is linked to Purchase Order
-PO-2024-00123.") is also prepended to the embedded/chunked text so the link is retrievable via semantic/BM25
-search without requiring a metadata filter.
+transaction document (this is a generic Frappe Dynamic Link and works for any doctype, e.g. a Sales Order).
+A matching sentence ("This contract is linked to Sales Order SO-2024-00123.") is also prepended to the
+embedded/chunked text so the link is retrievable via semantic/BM25 search without requiring a metadata filter.
 
 ## Incremental Indexing via Webhooks
 
@@ -190,14 +179,9 @@ ERPNext fires webhooks on the following events:
 
 | Doctype             | Event       | Effect                                                  |
 |---------------------|-------------|----------------------------------------------------------|
-| Purchase Order      | `on_submit` | Indexed fresh on submission (incl. attached PDFs)       |
-| Purchase Order      | `on_cancel` | Re-indexed with status=Cancelled                        |
-| Purchase Invoice    | `on_submit` | Indexed fresh on submission                             |
-| Purchase Invoice    | `on_cancel` | Re-indexed with status=Cancelled                        |
 | Contract            | `on_submit` | Indexed when contract is submitted (incl. attached PDFs)|
 | Contract            | `on_update` | Re-indexed on any desk save (incl. attached PDFs)       |
 | Terms and Conditions| `on_update` | Re-indexed (not a submittable doctype)                  |
-| Supplier Scorecard  | `on_update` | Re-indexed (scorecards are not submittable)             |
 
 > **Known gap:** `on_update_after_submit` for Purchase Orders is not supported. Frappe 15 does not fire this webhook event via API or desk UI saves, so edits to a submitted PO (e.g. delivery date, remarks) are not automatically re-indexed. Workaround: `POST /ingest/full`. See `docs/DEPLOYMENT.md` § Future Enhancements.
 
@@ -207,7 +191,7 @@ The webhook handler:
 3. Calls `vector_store.delete_by_docname(docname)` — removes all old chunks
 4. Re-runs the full parse → chunk → embed → upsert pipeline for that document only
 
-This ensures updated contract terms or re-submitted POs are reflected in the next query without a full re-index.
+This ensures updated contract terms are reflected in the next query without a full re-index.
 
 ## BM25 Index
 

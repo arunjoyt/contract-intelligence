@@ -6,6 +6,12 @@ Ordered list of modules to build. Each step depends on the ones before it. Do no
 historical build reference and is periodically refreshed to track implementation drift; for current
 system design and data flow, `docs/ARCHITECTURE.md` is authoritative.
 
+> **Note:** Steps below describe the system as originally built, covering Purchase Order, Purchase
+> Invoice, and Supplier Scorecard ingestion alongside Contract and Terms and Conditions. The project
+> was later descoped to Contract Intelligence only (dropping those three doctypes) — see #66 and
+> `docs/CONTRACT_INTELLIGENCE_DESCOPE_PLAN.md` for the decision, and `docs/ARCHITECTURE.md` for the
+> current, descoped design.
+
 ---
 
 ## Step 0 — ERPNext Environment Verification
