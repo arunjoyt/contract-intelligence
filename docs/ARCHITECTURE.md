@@ -181,6 +181,7 @@ ERPNext fires webhooks on the following events:
 |---------------------|-------------|----------------------------------------------------------|
 | Contract            | `on_submit` | Indexed when contract is submitted (incl. attached PDFs)|
 | Contract            | `on_update` | Re-indexed on any desk save (incl. attached PDFs)       |
+| Contract            | `on_cancel` | Re-indexed with status=Cancelled                        |
 | Terms and Conditions| `on_update` | Re-indexed (not a submittable doctype)                  |
 
 > **Known gap:** `on_update_after_submit` for Purchase Orders is not supported. Frappe 15 does not fire this webhook event via API or desk UI saves, so edits to a submitted PO (e.g. delivery date, remarks) are not automatically re-indexed. Workaround: `POST /ingest/full`. See `docs/DEPLOYMENT.md` § Future Enhancements.

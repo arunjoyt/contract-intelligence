@@ -57,8 +57,6 @@ _DOCTYPE_KEYWORDS: dict[str, list[str]] = {
 }
 
 _STATUS_KEYWORDS: list[str] = [
-    "submitted",
-    "draft",
     "cancelled",
     "active",
     "unsigned",

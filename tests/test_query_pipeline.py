@@ -101,14 +101,9 @@ def test_extract_filters_detects_terms_and_conditions() -> None:
     assert result.get("source_doctype") == "Terms and Conditions"
 
 
-def test_extract_filters_detects_submitted_status() -> None:
-    result = _extract_filters("List submitted contracts")
-    assert result.get("status") == "Submitted"
-
-
-def test_extract_filters_detects_draft_status() -> None:
-    result = _extract_filters("Are there any draft contracts?")
-    assert result.get("status") == "Draft"
+def test_extract_filters_detects_cancelled_status() -> None:
+    result = _extract_filters("List cancelled contracts")
+    assert result.get("status") == "Cancelled"
 
 
 def test_extract_filters_detects_unsigned_status() -> None:
@@ -117,9 +112,9 @@ def test_extract_filters_detects_unsigned_status() -> None:
 
 
 def test_extract_filters_detects_both_doctype_and_status() -> None:
-    result = _extract_filters("Show me all submitted contracts")
+    result = _extract_filters("Show me all cancelled contracts")
     assert result.get("source_doctype") == "Contract"
-    assert result.get("status") == "Submitted"
+    assert result.get("status") == "Cancelled"
 
 
 def test_extract_filters_is_case_insensitive() -> None:
@@ -303,12 +298,12 @@ def test_run_merges_extracted_and_caller_filters(monkeypatch: pytest.MonkeyPatch
     pipeline = _make_pipeline()
 
     # "contracts" triggers doctype extraction; caller adds supplier filter
-    pipeline.run("Show submitted contracts", filters={"supplier": "Acme"})
+    pipeline.run("Show cancelled contracts", filters={"supplier": "Acme"})
 
     call_args = pipeline._hybrid_search.search.call_args
     merged = call_args[0][1]
     assert merged.get("source_doctype") == "Contract"
-    assert merged.get("status") == "Submitted"
+    assert merged.get("status") == "Cancelled"
     assert merged.get("supplier") == "Acme"
 
 
