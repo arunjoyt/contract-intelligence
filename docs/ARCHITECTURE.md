@@ -16,7 +16,7 @@ ERPNext
                ▼
 ┌──────────────────────────────────┐
 │           Qdrant                 │
-│  Collection: procurement         │
+│  Collection: contract            │
 │  Indexed payload: source_doctype,│
 │  supplier, status, start_date,   │
 │  end_date                        │

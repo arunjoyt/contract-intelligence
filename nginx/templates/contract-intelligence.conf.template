@@ -1,5 +1,5 @@
 # Substituted by the official nginx:alpine entrypoint (20-envsubst-on-templates.sh)
-# into /etc/nginx/conf.d/procurement-rag.conf on every container start, using
+# into /etc/nginx/conf.d/contract-intelligence.conf on every container start, using
 # FRONTEND_DOMAIN / API_DOMAIN from the environment (see .env / docker-compose.yml).
 #
 # Only variables that exist as real environment variables get substituted —

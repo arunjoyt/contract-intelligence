@@ -35,10 +35,10 @@ services:
       TELEMETRY_ENABLED: "false"
       # Seed a project on first boot so LANGFUSE_PUBLIC_KEY / SECRET_KEY work immediately.
       # These must match the keys set in .env.
-      LANGFUSE_INIT_ORG_ID: procurement-org
-      LANGFUSE_INIT_ORG_NAME: Procurement
-      LANGFUSE_INIT_PROJECT_ID: procurement-project
-      LANGFUSE_INIT_PROJECT_NAME: procurement-rag
+      LANGFUSE_INIT_ORG_ID: contract-intelligence-org
+      LANGFUSE_INIT_ORG_NAME: Contract Intelligence
+      LANGFUSE_INIT_PROJECT_ID: contract-intelligence-project
+      LANGFUSE_INIT_PROJECT_NAME: contract-intelligence
       LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
       LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
       LANGFUSE_INIT_USER_EMAIL: admin@localhost.local

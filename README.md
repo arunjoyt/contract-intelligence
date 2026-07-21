@@ -1,15 +1,15 @@
-# Procurement Intelligence Assistant
+# Contract Intelligence Assistant
 
-A production-grade RAG application that answers natural language procurement queries grounded in ERPNext data.
+A production-grade RAG application that answers natural language contract queries grounded in ERPNext data.
 
 ## What It Does
 
-Query your procurement data in plain English:
+Query your contract data in plain English:
 
-- "Which vendor has the best delivery SLA for electrical components?"
-- "Are we violating any contract terms with PO-2024-1892?"
-- "Which suppliers have contracts expiring in the next 60 days?"
-- "What is the approved price ceiling for office supplies from Vendor X?"
+- "What are the payment terms in our contract with Alpha Supplies Ltd?"
+- "Which contracts are expiring in the next 60 days?"
+- "What are the warranty and return terms across our contracts?"
+- "Are there any unsigned contracts pending?"
 - "Summarize all penalty clauses across active contracts."
 
 ## Architecture
@@ -70,7 +70,7 @@ See `docs/ARCHITECTURE.md` for the full data-flow and schema breakdown.
 ## Project Structure
 
 ```
-procurement-rag/
+contract-intelligence/
 ├── ingestion/
 │   ├── erpnext_client.py       # Frappe REST API wrapper
 │   ├── document_parser.py      # HTML stripping, PDF extraction, struct→text
@@ -123,7 +123,7 @@ procurement-rag/
 ├── nginx/
 │   ├── nginx.conf              # Base reverse-proxy config (Option B production)
 │   └── templates/
-│       └── procurement-rag.conf.template  # envsubst template for FRONTEND_DOMAIN/API_DOMAIN
+│       └── contract-intelligence.conf.template  # envsubst template for FRONTEND_DOMAIN/API_DOMAIN
 ├── .github/
 │   └── workflows/
 │       └── ci.yml              # Lint, test, evaluate
@@ -168,22 +168,22 @@ See `docs/DEPLOYMENT.md` for the full topology and step-by-step instructions. Th
 1. Set your domains in `.env` (bare hostnames, no scheme — substituted into nginx's config
    automatically at container start, no manual file editing needed):
    ```
-   FRONTEND_DOMAIN=procurement-rag.example.com
-   API_DOMAIN=api.procurement-rag.example.com
+   FRONTEND_DOMAIN=contract-intelligence.example.com
+   API_DOMAIN=api.contract-intelligence.example.com
    ```
 2. Provision TLS certs for those same domains:
    ```bash
    certbot certonly --standalone \
-     -d procurement-rag.example.com \
-     -d api.procurement-rag.example.com
+     -d contract-intelligence.example.com \
+     -d api.contract-intelligence.example.com
    ```
 3. Fill in the rest of the production values in `.env`:
    - Strong random values for `WEBHOOK_SECRET`, `ADMIN_SECRET`, `JWT_SECRET`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`
    - Set URL vars to your actual domains:
      ```
-     OAUTH_REDIRECT_URI=https://api.procurement-rag.example.com/auth/callback
-     FRONTEND_URL=https://procurement-rag.example.com
-     PUBLIC_API_URL=https://api.procurement-rag.example.com
+     OAUTH_REDIRECT_URI=https://api.contract-intelligence.example.com/auth/callback
+     FRONTEND_URL=https://contract-intelligence.example.com
+     PUBLIC_API_URL=https://api.contract-intelligence.example.com
      ```
    - Update the ERPNext OAuth client's Redirect URI to match `OAUTH_REDIRECT_URI`
 4. Start everything:

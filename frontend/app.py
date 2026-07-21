@@ -1,4 +1,4 @@
-"""Streamlit procurement intelligence chat UI.
+"""Streamlit Contract Intelligence chat UI.
 
 Calls POST {BACKEND_URL}/query and renders the answer with a collapsible
 Sources expander.  Sidebar filters are merged into the request payload.
@@ -22,7 +22,7 @@ _DOCTYPES = ["Contract", "Terms and Conditions"]
 # Must run before any other st call so ?token= is captured on the redirect back.
 handle_token_from_url()
 
-st.set_page_config(page_title="Procurement Intelligence", layout="wide")
+st.set_page_config(page_title="Contract Intelligence", layout="wide")
 
 if "jwt" not in st.session_state:
     show_login_page()
@@ -49,7 +49,7 @@ def _render_sources(sources: list[dict]) -> None:
 # Page layout
 # ---------------------------------------------------------------------------
 
-st.title("Procurement Intelligence")
+st.title("Contract Intelligence")
 
 # ---------------------------------------------------------------------------
 # Sidebar filters
@@ -88,7 +88,7 @@ for msg in st.session_state.messages[-_MAX_HISTORY:]:
 # Chat input
 # ---------------------------------------------------------------------------
 
-if question := st.chat_input("Ask a procurement question..."):
+if question := st.chat_input("Ask a contract question..."):
     with st.chat_message("user"):
         st.markdown(question)
     st.session_state.messages.append({"role": "user", "content": question})
@@ -106,7 +106,7 @@ if question := st.chat_input("Ask a procurement question..."):
         filters["status"] = status
 
     with st.chat_message("assistant"):
-        with st.spinner("Searching procurement documents…"):
+        with st.spinner("Searching contract documents…"):
             try:
                 resp = httpx.post(
                     f"{BACKEND_URL}/query",
