@@ -111,6 +111,11 @@ def test_extract_filters_detects_draft_status() -> None:
     assert result.get("status") == "Draft"
 
 
+def test_extract_filters_detects_unsigned_status() -> None:
+    result = _extract_filters("Show me unsigned contracts")
+    assert result.get("status") == "Unsigned"
+
+
 def test_extract_filters_detects_both_doctype_and_status() -> None:
     result = _extract_filters("Show me all submitted contracts")
     assert result.get("source_doctype") == "Contract"

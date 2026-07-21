@@ -67,7 +67,7 @@ with st.sidebar:
         end_date = st.date_input("To", value=None, label_visibility="collapsed")
     status = st.selectbox(
         "Status",
-        ["", "Draft", "Submitted", "Cancelled", "Active"],
+        ["", "Draft", "Submitted", "Cancelled", "Active", "Unsigned"],
         format_func=lambda x: x or "Any",
     )
 

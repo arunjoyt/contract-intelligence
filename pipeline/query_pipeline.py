@@ -61,6 +61,7 @@ _STATUS_KEYWORDS: list[str] = [
     "draft",
     "cancelled",
     "active",
+    "unsigned",
 ]
 
 
