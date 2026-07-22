@@ -468,6 +468,47 @@ side's `hybrid_search`'s in-memory BM25 index is rebuilt automatically from Qdra
 
 ---
 
+## Langfuse Postgres Backup & Restore
+
+The `postgres` service (`pg_data` volume) is Langfuse's own database — traces, observations, scores,
+project config. Unlike ERPNext and Qdrant, this data is **not regenerable**: it's a running history of
+past queries, not something a re-ingest or re-query rebuilds. Losing it only affects observability
+(no functional impact on `/query` itself), so it's the lowest-priority of the three, but still worth a
+periodic `pg_dump` if you care about historical traces surviving a migration.
+
+**Backup** (custom format — compressed, and the only format `pg_restore` accepts for selective/parallel
+restore):
+
+```bash
+docker exec <postgres-container> pg_dump -U langfuse -d langfuse -F c -f /tmp/langfuse_dump.pgdump
+docker cp <postgres-container>:/tmp/langfuse_dump.pgdump ./langfuse_<timestamp>.pgdump
+docker exec <postgres-container> rm /tmp/langfuse_dump.pgdump
+```
+
+**Verify** the dump is readable before trusting it (lists the archive's table of contents without
+restoring anything):
+
+```bash
+docker cp ./langfuse_<timestamp>.pgdump <postgres-container>:/tmp/verify.pgdump
+docker exec <postgres-container> pg_restore --list /tmp/verify.pgdump
+docker exec <postgres-container> rm /tmp/verify.pgdump
+```
+
+**Restore** — ⚠️ run against an empty/fresh `langfuse` database, or expect conflicts on existing objects:
+
+```bash
+docker cp ./langfuse_<timestamp>.pgdump <postgres-container>:/tmp/restore.pgdump
+docker exec <postgres-container> pg_restore -U langfuse -d langfuse --clean --if-exists /tmp/restore.pgdump
+docker exec <postgres-container> rm /tmp/restore.pgdump
+```
+
+**Copying to a different machine**: `scp` the `.pgdump` file to the target host, then run the restore
+steps above against that host's `postgres` container. Credentials (`langfuse`/`langfuse` by default —
+see the security issue about hardcoding these, #65) come from `docker-compose.yml`'s `POSTGRES_USER`/
+`POSTGRES_PASSWORD`, not `.env`.
+
+---
+
 ## `.env` — the one thing that blocks every restore above
 
 `.env` is gitignored by design (see `ingestion/erpnext_client.py`, `pipeline/query_pipeline.py`, etc. —
