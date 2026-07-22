@@ -382,6 +382,51 @@ The webhook handler (`ingestion/webhook_handler.py`) is event-agnostic: for any 
 
 ---
 
+## ERPNext Bench Backup & Restore
+
+Standard `bench` commands for snapshotting and resetting an ERPNext site's data (e.g. dev/demo data
+used for testing this app, or before/after a risky change). Applies to any bench-managed site,
+local or remote — run from the bench directory (`cd <bench-dir>` first).
+
+**Backup** (`--with-files` captures attached files, e.g. Contract PDFs, not just the database):
+
+```bash
+bench --site <site-name> backup --with-files
+```
+
+Writes to `sites/<site-name>/private/backups/`, timestamped, e.g.:
+```
+<timestamp>-<site-name>-database.sql.gz
+<timestamp>-<site-name>-private-files.tar
+<timestamp>-<site-name>-files.tar               # public files, despite the plain name
+<timestamp>-<site-name>-site_config_backup.json
+```
+
+**Restore** — ⚠️ overwrites the site's database and files entirely:
+
+```bash
+bench --site <site-name> restore \
+  sites/<site-name>/private/backups/<timestamp>-<site-name>-database.sql.gz \
+  --with-private-files sites/<site-name>/private/backups/<timestamp>-<site-name>-private-files.tar \
+  --with-public-files sites/<site-name>/private/backups/<timestamp>-<site-name>-files.tar
+```
+
+**Copying to a different machine** (e.g. local backup → VPS) — `scp` the four backup files to the
+target bench's `sites/<site-name>/private/backups/` directory first, then run the restore command
+there:
+
+```bash
+scp sites/<site-name>/private/backups/<timestamp>-<site-name>-database.sql.gz \
+    sites/<site-name>/private/backups/<timestamp>-<site-name>-private-files.tar \
+    sites/<site-name>/private/backups/<timestamp>-<site-name>-files.tar \
+    sites/<site-name>/private/backups/<timestamp>-<site-name>-site_config_backup.json \
+    <remote-user>@<remote-host>:<remote-bench-dir>/sites/<remote-site-name>/private/backups/
+```
+
+Then, on the remote host, run the restore command above with `<remote-site-name>`.
+
+---
+
 ## What was built — Option B (implemented, PR #32)
 
 Option B was chosen and merged. The table below maps the delivered modules to `IMPLEMENTATION_PLAN.md` steps:
