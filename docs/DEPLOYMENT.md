@@ -427,6 +427,66 @@ Then, on the remote host, run the restore command above with `<remote-site-name>
 
 ---
 
+## Qdrant Backup & Restore
+
+The `contract` collection is Qdrant's own copy of every chunk + embedding. It's regenerable via
+`POST /ingest/full` against ERPNext, but that re-embeds everything through OpenAI again (time + cost),
+so snapshotting it is worthwhile the same way ERPNext's bench backup is. Qdrant's snapshot API does
+this — run against the container's exposed port (`localhost:6333` for local dev; loopback-only on a VPS,
+so run these from the host or over an SSH tunnel).
+
+> **Note:** snapshots are written to `/qdrant/snapshots` inside the container, which is **not** one of
+> the named volumes in `docker-compose.yml` (only `/qdrant/storage` is, via `qdrant_data`). A snapshot
+> survives container restarts but is lost if the container is removed/recreated — copy it out with
+> `docker cp` right after creating it, same as below.
+
+**Backup:**
+
+```bash
+# Create the snapshot (server-side, inside the qdrant container)
+curl -X POST http://localhost:6333/collections/contract/snapshots
+
+# Response includes "name": "<snapshot-file>.snapshot" — copy it (and its checksum) out of the container
+docker cp <qdrant-container>:/qdrant/snapshots/contract/<snapshot-file>.snapshot ./
+docker cp <qdrant-container>:/qdrant/snapshots/contract/<snapshot-file>.snapshot.checksum ./
+
+# Verify integrity before trusting the copy
+shasum -a 256 <snapshot-file>.snapshot   # compare against the .checksum file's contents
+```
+
+**Restore** — ⚠️ overwrites the `contract` collection entirely:
+
+```bash
+curl -X PUT http://localhost:6333/collections/contract/snapshots/upload \
+  -F "snapshot=@<snapshot-file>.snapshot"
+```
+
+**Copying to a different machine** (e.g. local backup → VPS): `scp` the `.snapshot` (and `.checksum`)
+file to the target host, then run the restore `curl` above against that host's Qdrant port. The API
+side's `hybrid_search`'s in-memory BM25 index is rebuilt automatically from Qdrant at API startup
+(see `api/main.py`'s lifespan hook), so no separate BM25 backup is needed.
+
+---
+
+## `.env` — the one thing that blocks every restore above
+
+`.env` is gitignored by design (see `ingestion/erpnext_client.py`, `pipeline/query_pipeline.py`, etc. —
+all secrets are read from environment variables, never committed). It holds `OPENAI_API_KEY`,
+`ERPNEXT_API_KEY`/`ERPNEXT_API_SECRET`, `JWT_SECRET`, `ADMIN_SECRET`, `WEBHOOK_SECRET`, and the OAuth
+client id/secret. Without it, neither an ERPNext restore nor a Qdrant restore is usable on a new
+box — nothing in the stack can start.
+
+- **Do not** back it up as a plain file copy sitting in a repo, shared drive, or unencrypted archive.
+- Store it in a password manager or secrets vault (1Password, Bitwarden, `pass`, etc.) as a single
+  secure note, or re-derive each value at deploy time from its source of truth (ERPNext's own API key
+  admin page, a freshly generated random secret for `JWT_SECRET`/`ADMIN_SECRET`/`WEBHOOK_SECRET`, the
+  OpenAI/ERPNext OAuth app dashboards) rather than copying the file around.
+- If you do keep an encrypted copy, treat rotating any one of these secrets as invalidating that copy —
+  update the vault entry at rotation time (see `docs/DEPLOYMENT.md`'s "`.env` changes vs. code changes"
+  note under "Ongoing ops" for how a rotated value gets picked up by the running containers).
+
+---
+
 ## What was built — Option B (implemented, PR #32)
 
 Option B was chosen and merged. The table below maps the delivered modules to `IMPLEMENTATION_PLAN.md` steps:
