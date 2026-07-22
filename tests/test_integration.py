@@ -1061,6 +1061,113 @@ def test_query_endpoint_returns_answer_and_sources(api_http) -> None:
     assert isinstance(data["sources"], list)
 
 
+# README example questions (see README's "Example Questions" table + the bonus
+# Langfuse-verification question) against the demo dataset seeded by
+# scripts/seed_demo_data.py (see docs/DEMO_DATA_PLAN.md). Assertions check for
+# content tied to the fixture's authored prose (percentages, day counts, payment
+# terms) rather than specific docnames, since Contract docnames are server-assigned
+# and renumber on every reseed.
+_README_QUESTIONS = [
+    (
+        "What penalty applies if Zuckerman Security Ltd. exceeds two service level "
+        "incidents in a quarter?",
+        ["5%"],
+        False,
+    ),
+    (
+        "Which supplier bears the cost of replacing defective goods delivered under warranty?",
+        ["alpha supplies"],
+        False,
+    ),
+    (
+        "Compare the payment terms across our contracts with Alpha Supplies Ltd. "
+        "and Summit Traders Ltd.",
+        ["net 30", "net 45"],
+        False,
+    ),
+    (
+        "What recourse do we have if a security services vendor doesn't perform "
+        "to the agreed standard?",
+        ["zuckerman", "cure"],
+        False,
+    ),
+    (
+        "Has our contract with Zuckerman Security Ltd. been signed yet?",
+        ["unsigned"],
+        False,
+    ),
+    (
+        "What's our contract value with a supplier called Globex Corp?",
+        ["could not find"],
+        True,
+    ),
+    (
+        "What is Zuckerman Security Ltd.'s liability cap under the signed contract "
+        "PDF, and how quickly can either party terminate for cause?",
+        ["12", "cure"],
+        False,
+    ),
+]
+
+
+@live
+@pytest.mark.api
+@pytest.mark.parametrize("question,required_substrings,is_refusal", _README_QUESTIONS)
+def test_readme_example_question(
+    api_http, question: str, required_substrings: list[str], is_refusal: bool
+) -> None:
+    """Each README example question returns a grounded, correctly-cited answer —
+    except the Globex Corp negative test case, which must be a grounded refusal.
+    """
+    import httpx
+
+    r = httpx.post(
+        f"{api_http}/query",
+        json={"question": question},
+        headers=_integration_auth_headers(),
+        timeout=60,
+    )
+    assert r.status_code == 200
+    data = r.json()
+    answer_lower = data["answer"].lower()
+
+    for substring in required_substrings:
+        assert substring in answer_lower, (
+            f"Expected {substring!r} in answer for {question!r}; got: {data['answer']!r}"
+        )
+
+    if is_refusal:
+        assert data["sources"] == [], (
+            f"Expected no sources for a grounded refusal; got: {data['sources']!r}"
+        )
+    else:
+        assert data["sources"], f"Expected non-empty sources for {question!r}"
+
+
+@live
+@pytest.mark.api
+def test_readme_active_contracts_question_is_grounded_not_refused(api_http) -> None:
+    """The bonus README/Langfuse-verification question ('What are the payment terms
+    for our active contracts?') must return a grounded answer with citations — not
+    checked against exact payment-term text, since which contracts count as
+    'active' drifts over time as Contract end_dates pass relative to today.
+    """
+    import httpx
+
+    r = httpx.post(
+        f"{api_http}/query",
+        json={"question": "What are the payment terms for our active contracts?"},
+        headers=_integration_auth_headers(),
+        timeout=60,
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert "could not find" not in data["answer"].lower(), (
+        f"Expected a grounded answer, got a refusal: {data['answer']!r}"
+    )
+    assert data["sources"], "Expected non-empty sources for an active-contracts question"
+
+
 # ===========================================================================
 # GROUP 5 — Evaluation script (Step 14 — evaluation/evaluate.py)
 # Services: Qdrant + OpenAI  (ERPNext not required — dataset is self-contained)
