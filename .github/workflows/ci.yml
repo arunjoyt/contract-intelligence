@@ -23,10 +23,32 @@ jobs:
       - name: Unit tests
         run: pytest tests/ -v
 
+  changes:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    outputs:
+      pipeline: ${{ steps.filter.outputs.pipeline }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            pipeline:
+              - 'pipeline/**'
+              - 'retrieval/**'
+              - 'ingestion/**'
+              - 'evaluation/**'
+              - 'config.py'
+              - 'requirements.txt'
+
   evaluate:
     runs-on: ubuntu-latest
-    needs: lint-and-test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [lint-and-test, changes]
+    if: >
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.changes.outputs.pipeline == 'true'
 
     services:
       qdrant:
