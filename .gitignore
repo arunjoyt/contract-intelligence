@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 CLAUDE.local.md
+scripts/backup_all.local.sh
 
 # Python
 __pycache__/

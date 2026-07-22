@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Machine-specific overrides for scripts/backup_all.sh.
+#
+# Copy this file to scripts/backup_all.local.sh (gitignored, never committed)
+# and fill in your machine's values -- mirrors the "Frappe and ERPNext local
+# setup" section of CLAUDE.local.md.
+
+export BENCH_BIN="/path/to/venv/bin/bench"
+export BENCH_DIR="/path/to/benches/<bench-name>"
+export SITE_NAME="<site-name>"
+
+# Uncomment to override other defaults (see backup_all.sh for what each does):
+# export QDRANT_URL="http://localhost:6333"
+# export QDRANT_COLLECTION="contract"
+# export QDRANT_CONTAINER="contract-intelligence-qdrant-1"
+# export POSTGRES_CONTAINER="contract-intelligence-postgres-1"
+# export POSTGRES_USER="langfuse"
+# export POSTGRES_DB="langfuse"
+# export BACKUP_ROOT="$HOME/contract-intelligence-backups"
