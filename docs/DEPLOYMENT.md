@@ -457,7 +457,7 @@ shasum -a 256 <snapshot-file>.snapshot   # compare against the .checksum file's 
 **Restore** — ⚠️ overwrites the `contract` collection entirely:
 
 ```bash
-curl -X PUT http://localhost:6333/collections/contract/snapshots/upload \
+curl -X POST http://localhost:6333/collections/contract/snapshots/upload \
   -F "snapshot=@<snapshot-file>.snapshot"
 ```
 

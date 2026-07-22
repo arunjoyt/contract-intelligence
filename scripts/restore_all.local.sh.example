@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Machine-specific config for scripts/restore_all.sh.
+#
+# Copy this file to scripts/restore_all.local.sh (gitignored, never committed)
+# and point each variable at the exact backup file you want to restore --
+# nothing is auto-selected. Leave a variable empty/commented to skip that
+# step entirely.
+
+# From scripts/backup_all.local.sh -- same bench used to create the backup.
+export BENCH_BIN="/path/to/venv/bin/bench"
+export BENCH_DIR="/path/to/benches/<bench-name>"
+export SITE_NAME="<site-name>"
+
+# ERPNext: all three files must be from the same backup run (same timestamp
+# prefix), found under $BENCH_DIR/sites/$SITE_NAME/private/backups/.
+export ERPNEXT_RESTORE_DB="/path/to/benches/<bench-name>/sites/<site-name>/private/backups/<timestamp>-<site-name>-database.sql.gz"
+export ERPNEXT_RESTORE_PRIVATE_FILES="/path/to/benches/<bench-name>/sites/<site-name>/private/backups/<timestamp>-<site-name>-private-files.tar"
+export ERPNEXT_RESTORE_PUBLIC_FILES="/path/to/benches/<bench-name>/sites/<site-name>/private/backups/<timestamp>-<site-name>-files.tar"
+
+# Qdrant: the exact .snapshot file to restore (its sibling .checksum is used
+# automatically to verify integrity before restoring).
+export QDRANT_RESTORE_SNAPSHOT="/path/to/backups/qdrant/<snapshot-file>.snapshot"
+
+# Langfuse Postgres: the exact .pgdump file to restore.
+export POSTGRES_RESTORE_DUMP="/path/to/backups/postgres/<dump-file>.pgdump"
+
+# Uncomment to override other defaults (see restore_all.sh for what each does):
+# export QDRANT_URL="http://localhost:6333"
+# export QDRANT_COLLECTION="contract"
+# export QDRANT_CONTAINER="contract-intelligence-qdrant-1"
+# export POSTGRES_CONTAINER="contract-intelligence-postgres-1"
+# export POSTGRES_USER="langfuse"
+# export POSTGRES_DB="langfuse"
