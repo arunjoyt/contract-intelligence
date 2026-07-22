@@ -36,3 +36,7 @@ pytest-asyncio==0.24.0
 respx==0.21.1
 ruff==0.7.1
 mypy==1.13.0
+
+# Demo data seeding
+reportlab==4.2.5
+PyYAML==6.0.2

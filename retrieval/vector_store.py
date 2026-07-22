@@ -53,6 +53,13 @@ class VectorStore:
                 vectors_config=VectorParams(size=VECTOR_DIM, distance=Distance.COSINE),
             )
 
+    def reset_collection(self) -> None:
+        """Delete the collection if it exists, then recreate it empty."""
+        existing = {c.name for c in self._client.get_collections().collections}
+        if self._collection in existing:
+            self._client.delete_collection(collection_name=self._collection)
+        self.ensure_collection()
+
     def upsert_chunks(self, chunks: list[dict]) -> None:
         """Upsert enriched chunk dicts into Qdrant.
 
