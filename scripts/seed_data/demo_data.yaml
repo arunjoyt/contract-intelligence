@@ -1,0 +1,676 @@
+# Demo data fixture for scripts/seed_demo_data.py. See docs/DEMO_DATA_PLAN.md.
+#
+# 22 suppliers across varied industries, 31 contracts (Active 14 / Unsigned 9 / Inactive 5 /
+# Cancelled 3), 9 Terms and Conditions docs (8 active + 1 disabled), 9 PDF attachments.
+# Globex Corp is intentionally never created (README's grounded-refusal test case).
+
+suppliers:
+  - name: "Zuckerman Security Ltd."
+    supplier_group: "Security Services"
+  - name: "Summit Traders Ltd."
+    supplier_group: "Raw Materials Supply"
+  - name: "Alpha Supplies Ltd."
+    supplier_group: "Packaging"
+  - name: "Nimbus Cloud Solutions Inc."
+    supplier_group: "SaaS / Software Licensing"
+  - name: "Vertex Hardware Systems Ltd."
+    supplier_group: "IT Hardware Procurement"
+  - name: "Meridian Consulting Group"
+    supplier_group: "Consulting / Professional Services"
+  - name: "Ashford Facilities Management Ltd."
+    supplier_group: "Facilities & Maintenance"
+  - name: "Brightline Marketing Partners"
+    supplier_group: "Marketing / Advertising"
+  - name: "Coastal Warehousing & Logistics Ltd."
+    supplier_group: "Warehousing & Logistics"
+  - name: "Pristine Commercial Cleaning Co."
+    supplier_group: "Cleaning Services"
+  - name: "Harrow & Vance Legal Advisors"
+    supplier_group: "Legal Services"
+  - name: "Telstar Connectivity Ltd."
+    supplier_group: "Telecom / Connectivity"
+  - name: "Cornerstone Insurance Brokers Ltd."
+    supplier_group: "Insurance Brokerage"
+  - name: "Talent Bridge Recruitment Ltd."
+    supplier_group: "Recruitment / Staffing"
+  - name: "Ironclad Equipment Leasing Co."
+    supplier_group: "Equipment Leasing"
+  - name: "Wescott Printing & Stationery Ltd."
+    supplier_group: "Printing & Stationery"
+  - name: "Greenfield Waste Management Ltd."
+    supplier_group: "Waste Management"
+  - name: "Voyager Travel & Events Ltd."
+    supplier_group: "Travel & Events"
+  - name: "Harvest Catering Supplies Ltd."
+    supplier_group: "Catering / Office Supplies"
+  - name: "Blackstone Construction & Fit-Out Ltd."
+    supplier_group: "Construction / Fit-Out"
+  - name: "Quantum Data Analytics Inc."
+    supplier_group: "SaaS / Data Analytics"
+  - name: "Sterling Office Furnishings Ltd."
+    supplier_group: "Office Furnishings"
+
+terms_and_conditions:
+  - title: "Standard Purchase Terms - Net 30"
+    terms_html: |
+      <p>Payment is due within 30 days of invoice date. Late payments accrue interest at 1.5%
+      per month. Goods remain the property of the supplier until payment is received in full.</p>
+
+  - title: "Security Services - Confidentiality Clause"
+    terms_html: |
+      <p>All personnel deployed under this agreement shall be bound by confidentiality
+      obligations covering premises layouts, access codes, and incident reports for the
+      duration of the engagement and two years thereafter.</p>
+
+  - title: "Warehousing & Logistics - Liability Terms"
+    terms_html: |
+      <p>The warehousing provider's liability for loss or damage to stored goods is capped at
+      the declared value of the goods or $50,000 per incident, whichever is lower. Claims must
+      be filed within 15 days of discovery.</p>
+
+  - title: "SaaS / Software License Terms"
+    terms_html: |
+      <p>The license is non-exclusive and non-transferable for the subscription term. The
+      vendor commits to 99.9% monthly uptime; service credits apply for any shortfall,
+      calculated on a sliding scale against the monthly subscription fee.</p>
+
+  - title: "Consulting / Professional Services Terms"
+    terms_html: |
+      <p>Deliverables are billed against agreed milestones. Either party may terminate for
+      convenience with 30 days' written notice; fees for work completed up to the termination
+      date remain payable.</p>
+
+  - title: "Marketing Services Terms"
+    terms_html: |
+      <p>Campaign creative and media placements require written approval before publication.
+      All media spend is billed at cost plus an agreed agency fee, itemized monthly.</p>
+
+  - title: "IT Hardware Warranty Terms"
+    terms_html: |
+      <p>All hardware is covered by a 3-year manufacturer warranty passed through to the buyer.
+      Defective units are replaced within 5 business days of a validated support ticket.</p>
+
+  - title: "Facilities Maintenance SLA Terms"
+    terms_html: |
+      <p>Routine maintenance requests are actioned within 2 business days; emergency callouts
+      (life-safety systems, flooding, power loss) are actioned within 4 hours, 24/7.</p>
+
+  - title: "Legacy Payment Terms - Net 60"
+    disabled: true
+    terms_html: |
+      <p>Deprecated. Payment was due within 60 days of invoice date. Superseded by Standard
+      Purchase Terms - Net 30 for all agreements executed after 2024.</p>
+
+contracts:
+  # --- Zuckerman Security Ltd. ---
+  - key: "zuckerman-security-msa-2026"
+    party_type: "Supplier"
+    party_name: "Zuckerman Security Ltd."
+    status: "Unsigned"
+    docstatus: 1
+    is_signed: false
+    start_date: "2026-01-01"
+    end_date: "2026-12-31"
+    contract_terms_html: |
+      <p>This Master Services Agreement covers on-site security services provided by Zuckerman
+      Security Ltd. at the buyer's primary facility, including guard staffing, access control
+      monitoring, and incident response.</p>
+      <p><strong>Service Level Agreement.</strong> Zuckerman shall maintain a maximum of two
+      (2) service level incidents per calendar quarter. Should this threshold be exceeded, a
+      penalty equal to 5% of the quarterly invoice amount shall apply for each additional
+      incident.</p>
+      <p><strong>Termination for Cause.</strong> Either party may terminate this agreement for
+      cause with a 15-day cure period following written notice of breach.</p>
+    pdf_attachment:
+      title: "Zuckerman Security Ltd. — Master Services Agreement"
+      clauses:
+        - heading: "Liability Cap"
+          body: >
+            The total aggregate liability of either party arising under this agreement shall
+            not exceed an amount equal to twelve (12) months' fees paid under this contract.
+        - heading: "Termination for Cause"
+          body: >
+            Either party may terminate this agreement for cause upon written notice, subject
+            to a fifteen (15) day cure period during which the breaching party may remedy the
+            default.
+
+  - key: "zuckerman-security-audit-2025"
+    party_type: "Supplier"
+    party_name: "Zuckerman Security Ltd."
+    status: "Unsigned"
+    docstatus: 2
+    is_signed: false
+    start_date: "2025-01-01"
+    end_date: "2025-06-30"
+    contract_terms_html: |
+      <p>This agreement covered a one-time physical security audit of the buyer's warehouse
+      facilities by Zuckerman Security Ltd., including a vulnerability assessment and
+      remediation report.</p>
+      <p>The engagement was mutually terminated prior to signature after the buyer elected to
+      defer the audit to the following fiscal year.</p>
+
+  # --- Summit Traders Ltd. ---
+  - key: "summit-traders-materials-2026"
+    party_type: "Supplier"
+    party_name: "Summit Traders Ltd."
+    status: "Unsigned"
+    docstatus: 0
+    is_signed: false
+    start_date: "2026-02-01"
+    end_date: "2027-01-31"
+    contract_terms_html: |
+      <p>This agreement covers the supply of raw materials (structural steel and aluminum
+      stock) by Summit Traders Ltd. to the buyer's manufacturing sites.</p>
+      <p><strong>Payment Terms.</strong> Payment is due within 45 days of invoice date
+      (Net 45).</p>
+      <p><strong>Delivery.</strong> Summit Traders shall deliver against a rolling 8-week
+      forecast provided monthly by the buyer; short-shipments must be made good within 10
+      business days.</p>
+
+  - key: "summit-traders-logistics-2027"
+    party_type: "Supplier"
+    party_name: "Summit Traders Ltd."
+    status: "Active"
+    docstatus: 1
+    is_signed: true
+    start_date: "2027-02-01"
+    end_date: "2028-01-31"
+    contract_terms_html: |
+      <p>This addendum expands the existing raw materials supply relationship with Summit
+      Traders Ltd. to include inbound freight consolidation for shipments over 500kg.</p>
+      <p><strong>Payment Terms.</strong> Payment is due within 45 days of invoice date
+      (Net 45), consistent with the base supply agreement.</p>
+
+  # --- Alpha Supplies Ltd. ---
+  - key: "alpha-supplies-packaging-2026"
+    party_type: "Supplier"
+    party_name: "Alpha Supplies Ltd."
+    status: "Active"
+    docstatus: 1
+    is_signed: true
+    start_date: "2026-01-01"
+    end_date: "2026-12-31"
+    contract_terms_html: |
+      <p>This agreement covers the supply of corrugated packaging materials and custom
+      cartons by Alpha Supplies Ltd. to the buyer's distribution centers.</p>
+      <p><strong>Payment Terms.</strong> Payment is due within 30 days of invoice date
+      (Net 30).</p>
+      <p><strong>Warranty.</strong> Alpha Supplies Ltd. warrants all delivered goods against
+      defects for a period of 90 days. Defective goods shall be replaced at Alpha's expense,
+      including shipping costs for the return and replacement.</p>
+
+  - key: "alpha-supplies-legacy-2023"
+    party_type: "Supplier"
+    party_name: "Alpha Supplies Ltd."
+    status: "Inactive"
+    docstatus: 1
+    is_signed: true
+    start_date: "2023-03-01"
+    end_date: "2024-02-29"
+    contract_terms_html: |
+      <p>This prior packaging supply agreement with Alpha Supplies Ltd. covered standard
+      cardboard boxes only, at Net 30 payment terms, and has since been superseded by the
+      current packaging agreement covering custom cartons.</p>
+
+  # --- Nimbus Cloud Solutions Inc. ---
+  - key: "nimbus-cloud-saas-2026"
+    party_type: "Supplier"
+    party_name: "Nimbus Cloud Solutions Inc."
+    status: "Active"
+    docstatus: 1
+    is_signed: true
+    start_date: "2026-03-01"
+    end_date: "2027-02-28"
+    contract_terms_html: |
+      <p>This agreement covers a subscription to Nimbus Cloud Solutions Inc.'s procurement
+      analytics platform, licensed for up to 200 named users.</p>
+      <p><strong>Service Level Agreement.</strong> Nimbus commits to 99.9% monthly platform
+      uptime. Service credits of 5% of the monthly fee apply for each 0.1% shortfall below
+      this threshold, up to a maximum of 30% in any given month.</p>
+      <p><strong>Data Residency.</strong> All buyer data is stored exclusively in EU-based
+      data centers and is deleted within 30 days of contract termination.</p>
+
+  # --- Vertex Hardware Systems Ltd. ---
+  - key: "vertex-hardware-procurement-2026"
+    party_type: "Supplier"
+    party_name: "Vertex Hardware Systems Ltd."
+    status: "Active"
+    docstatus: 1
+    is_signed: true
+    start_date: "2026-01-01"
+    end_date: "2026-06-30"
+    contract_terms_html: |
+      <p>This agreement covers a bulk purchase of 500 laptops and associated docking
+      stations from Vertex Hardware Systems Ltd. for the buyer's office refresh program.</p>
+      <p><strong>Delivery Milestones.</strong> Delivery is staged across three tranches of
+      approximately 165 units each, with the final tranche due no later than June 30, 2026.</p>
+    pdf_attachment:
+      title: "Vertex Hardware Systems Ltd. — Hardware Warranty Schedule"
+      clauses:
+        - heading: "Warranty Coverage"
+          body: >
+            All hardware supplied under this agreement carries a three (3) year manufacturer
+            warranty covering parts and labor, passed through in full to the buyer.
+        - heading: "Replacement Turnaround"
+          body: >
+            Defective units are replaced within five (5) business days of a validated support
+            ticket, with advance-replacement units shipped ahead of the defective return where
+            available.
+
+  - key: "vertex-hardware-support-2027"
+    party_type: "Supplier"
+    party_name: "Vertex Hardware Systems Ltd."
+    status: "Active"
+    docstatus: 1
+    is_signed: true
+    start_date: "2026-07-01"
+    end_date: "2027-06-30"
+    contract_terms_html: |
+      <p>This addendum adds an extended support and maintenance plan from Vertex Hardware
+      Systems Ltd. covering the laptop fleet purchased under the prior procurement agreement,
+      including next-business-day on-site repair.</p>
+
+  # --- Meridian Consulting Group ---
+  - key: "meridian-consulting-advisory-2026"
+    party_type: "Supplier"
+    party_name: "Meridian Consulting Group"
+    status: "Unsigned"
+    docstatus: 0
+    is_signed: false
+    start_date: "2026-04-01"
+    end_date: "2026-09-30"
+    contract_terms_html: |
+      <p>This proposed engagement covers a procurement process advisory project delivered by
+      Meridian Consulting Group, structured across three milestone-billed phases: current-state
+      assessment, target-state design, and implementation support.</p>
+      <p><strong>Termination.</strong> Either party may terminate for convenience with 30 days'
+      written notice; fees for work completed up to the termination date remain payable.</p>
+    pdf_attachment:
+      title: "Meridian Consulting Group — Statement of Work"
+      clauses:
+        - heading: "Milestone Billing"
+          body: >
+            Fees are invoiced upon written acceptance of each phase deliverable by the buyer's
+            project sponsor, within ten (10) business days of submission.
+        - heading: "Termination for Convenience"
+          body: >
+            Either party may terminate this engagement for convenience upon thirty (30) days'
+            written notice, with fees for work completed through the termination date
+            remaining payable in full.
+
+  # --- Ashford Facilities Management Ltd. ---
+  - key: "ashford-facilities-maintenance-2026"
+    party_type: "Supplier"
+    party_name: "Ashford Facilities Management Ltd."
+    status: "Active"
+    docstatus: 1
+    is_signed: true
+    start_date: "2025-07-01"
+    end_date: "2026-06-30"
+    contract_terms_html: |
+      <p>This agreement covers routine and emergency facilities maintenance across the buyer's
+      three regional offices, provided by Ashford Facilities Management Ltd.</p>
+      <p><strong>Response Times.</strong> Routine maintenance requests are actioned within 2
+      business days; emergency callouts covering life-safety systems, flooding, or power loss
+      are actioned within 4 hours, 24 hours a day.</p>
+    pdf_attachment:
+      title: "Ashford Facilities Management Ltd. — Maintenance SLA"
+      clauses:
+        - heading: "Emergency Response"
+          body: >
+            Emergency callouts covering life-safety systems, flooding, or power loss are
+            actioned within four (4) hours of report, twenty-four hours a day, seven days a
+            week.
+        - heading: "Routine Requests"
+          body: >
+            Non-emergency maintenance requests are actioned within two (2) business days of
+            submission via the buyer's facilities ticketing system.
+
+  - key: "ashford-facilities-cancelled-2024"
+    party_type: "Supplier"
+    party_name: "Ashford Facilities Management Ltd."
+    status: "Active"
+    docstatus: 2
+    is_signed: true
+    start_date: "2024-01-01"
+    end_date: "2024-12-31"
+    contract_terms_html: |
+      <p>This pilot facilities maintenance contract covered a single satellite office and was
+      cancelled mid-term after the buyer consolidated that office into the regional
+      headquarters covered under the main Ashford maintenance agreement.</p>
+
+  # --- Brightline Marketing Partners ---
+  - key: "brightline-marketing-campaign-2024"
+    party_type: "Supplier"
+    party_name: "Brightline Marketing Partners"
+    status: "Inactive"
+    docstatus: 1
+    is_signed: true
+    start_date: "2024-01-01"
+    end_date: "2024-12-31"
+    contract_terms_html: |
+      <p>This agreement covered a full-year brand awareness campaign delivered by Brightline
+      Marketing Partners, including digital media placements and quarterly creative refreshes.</p>
+      <p><strong>Media Spend.</strong> All media spend was billed at cost plus a 12% agency
+      fee, itemized monthly against an approved media plan.</p>
+
+  # --- Coastal Warehousing & Logistics Ltd. ---
+  - key: "coastal-warehousing-logistics-2026"
+    party_type: "Supplier"
+    party_name: "Coastal Warehousing & Logistics Ltd."
+    status: "Active"
+    docstatus: 1
+    is_signed: true
+    start_date: "2026-01-01"
+    end_date: "2027-12-31"
+    contract_terms_html: |
+      <p>This agreement covers third-party warehousing and last-mile logistics services
+      provided by Coastal Warehousing & Logistics Ltd. across two regional distribution
+      centers.</p>
+      <p><strong>Liability.</strong> Coastal's liability for loss or damage to stored goods is
+      capped at the declared value of the goods or $50,000 per incident, whichever is lower.</p>
+    pdf_attachment:
+      title: "Coastal Warehousing & Logistics Ltd. — Liability & Storage Schedule"
+      clauses:
+        - heading: "Liability Cap"
+          body: >
+            Liability for loss or damage to stored goods is capped at the declared value of
+            the goods or fifty thousand dollars ($50,000) per incident, whichever amount is
+            lower.
+        - heading: "Claims Window"
+          body: >
+            Claims for loss or damage must be filed in writing within fifteen (15) days of
+            discovery, accompanied by photographic evidence and the original delivery
+            manifest.
+
+  - key: "coastal-warehousing-cold-storage-2026"
+    party_type: "Supplier"
+    party_name: "Coastal Warehousing & Logistics Ltd."
+    status: "Unsigned"
+    docstatus: 0
+    is_signed: false
+    start_date: "2026-09-01"
+    end_date: "2027-08-31"
+    contract_terms_html: |
+      <p>This proposed addendum would add temperature-controlled cold storage capacity at
+      Coastal Warehousing & Logistics Ltd.'s northern facility, pending buyer sign-off on
+      pricing.</p>
+
+  # --- Pristine Commercial Cleaning Co. ---
+  - key: "pristine-cleaning-services-2026"
+    party_type: "Supplier"
+    party_name: "Pristine Commercial Cleaning Co."
+    status: "Active"
+    docstatus: 1
+    is_signed: true
+    start_date: "2025-09-01"
+    end_date: "2026-08-31"
+    contract_terms_html: |
+      <p>This agreement covers daily commercial cleaning services for the buyer's headquarters
+      building, provided by Pristine Commercial Cleaning Co. on a Monday-through-Friday
+      schedule after business hours.</p>
+      <p><strong>Payment Terms.</strong> Payment is due within 30 days of invoice date
+      (Net 30).</p>
+
+  # --- Harrow & Vance Legal Advisors ---
+  - key: "harrow-vance-legal-retainer-2026"
+    party_type: "Supplier"
+    party_name: "Harrow & Vance Legal Advisors"
+    status: "Unsigned"
+    docstatus: 0
+    is_signed: false
+    start_date: "2026-05-01"
+    end_date: "2027-04-30"
+    contract_terms_html: |
+      <p>This proposed retainer agreement with Harrow & Vance Legal Advisors would provide up
+      to 20 hours per month of general commercial legal advisory support, with additional
+      hours billed at the agreed hourly rate.</p>
+
+  # --- Telstar Connectivity Ltd. ---
+  - key: "telstar-connectivity-network-2026"
+    party_type: "Supplier"
+    party_name: "Telstar Connectivity Ltd."
+    status: "Active"
+    docstatus: 1
+    is_signed: true
+    start_date: "2025-01-01"
+    end_date: "2027-12-31"
+    contract_terms_html: |
+      <p>This agreement covers primary internet and WAN connectivity across all buyer office
+      locations, provided by Telstar Connectivity Ltd.</p>
+      <p><strong>Bandwidth SLA.</strong> Telstar guarantees a minimum of 1 Gbps symmetric
+      bandwidth per site with 99.95% monthly availability; service credits apply on a sliding
+      scale for shortfalls below this threshold.</p>
+    pdf_attachment:
+      title: "Telstar Connectivity Ltd. — Network SLA"
+      clauses:
+        - heading: "Bandwidth Guarantee"
+          body: >
+            Telstar guarantees a minimum of one (1) Gbps symmetric bandwidth per site, with
+            ninety-nine point nine-five percent (99.95%) monthly availability measured at the
+            site router.
+        - heading: "Service Credits"
+          body: >
+            Service credits are issued on a sliding scale for any monthly availability
+            shortfall below the guaranteed threshold, up to a maximum of twenty percent (20%)
+            of that month's fees.
+
+  - key: "telstar-connectivity-backup-link-2024"
+    party_type: "Supplier"
+    party_name: "Telstar Connectivity Ltd."
+    status: "Inactive"
+    docstatus: 1
+    is_signed: true
+    start_date: "2024-03-01"
+    end_date: "2025-02-28"
+    contract_terms_html: |
+      <p>This agreement covered a secondary backup connectivity line from Telstar Connectivity
+      Ltd. at the buyer's headquarters, since decommissioned in favor of a dual-primary
+      configuration under the main network agreement.</p>
+
+  # --- Cornerstone Insurance Brokers Ltd. ---
+  - key: "cornerstone-insurance-brokerage-2026"
+    party_type: "Supplier"
+    party_name: "Cornerstone Insurance Brokers Ltd."
+    status: "Unsigned"
+    docstatus: 0
+    is_signed: false
+    start_date: "2026-06-01"
+    end_date: "2027-05-31"
+    contract_terms_html: |
+      <p>This proposed agreement would appoint Cornerstone Insurance Brokers Ltd. as broker of
+      record for the buyer's commercial property and general liability insurance placements.</p>
+    pdf_attachment:
+      title: "Cornerstone Insurance Brokers Ltd. — Broker Services Terms"
+      clauses:
+        - heading: "Scope of Services"
+          body: >
+            Cornerstone shall market the buyer's commercial property and general liability
+            risks to no fewer than three (3) qualified underwriters at each renewal cycle.
+        - heading: "Commission Disclosure"
+          body: >
+            Cornerstone shall disclose all commissions and fees received from underwriters in
+            connection with placements made on the buyer's behalf, in writing, at least
+            annually.
+
+  # --- Talent Bridge Recruitment Ltd. ---
+  - key: "talent-bridge-staffing-2026"
+    party_type: "Supplier"
+    party_name: "Talent Bridge Recruitment Ltd."
+    status: "Active"
+    docstatus: 1
+    is_signed: true
+    start_date: "2026-02-01"
+    end_date: "2026-08-01"
+    contract_terms_html: |
+      <p>This agreement covers temporary staffing placements sourced by Talent Bridge
+      Recruitment Ltd. for the buyer's seasonal warehouse operations.</p>
+      <p><strong>Placement Fee.</strong> A placement fee equal to 15% of first-year salary
+      applies for any temporary placement converted to a permanent role within 6 months.</p>
+
+  # --- Ironclad Equipment Leasing Co. ---
+  - key: "ironclad-equipment-leasing-2026"
+    party_type: "Supplier"
+    party_name: "Ironclad Equipment Leasing Co."
+    status: "Active"
+    docstatus: 1
+    is_signed: true
+    start_date: "2026-01-01"
+    end_date: "2028-12-31"
+    contract_terms_html: |
+      <p>This agreement covers the lease of six forklifts and associated maintenance from
+      Ironclad Equipment Leasing Co. for the buyer's main distribution center.</p>
+      <p><strong>Maintenance.</strong> Ironclad is responsible for all scheduled and unscheduled
+      maintenance; the buyer is responsible for operator training and daily safety checks.</p>
+    pdf_attachment:
+      title: "Ironclad Equipment Leasing Co. — Equipment Lease Schedule"
+      clauses:
+        - heading: "Maintenance Responsibility"
+          body: >
+            Ironclad Equipment Leasing Co. is responsible for all scheduled and unscheduled
+            maintenance on leased equipment; the buyer is responsible for daily operator
+            safety checks and reporting faults promptly.
+        - heading: "Early Return"
+          body: >
+            Equipment may be returned prior to the scheduled lease end date upon thirty (30)
+            days' written notice, subject to an early-return fee equal to one (1) month's
+            lease payment.
+
+  - key: "ironclad-equipment-forklifts-2023"
+    party_type: "Supplier"
+    party_name: "Ironclad Equipment Leasing Co."
+    status: "Active"
+    docstatus: 2
+    is_signed: true
+    start_date: "2023-06-01"
+    end_date: "2024-05-31"
+    contract_terms_html: |
+      <p>This prior forklift lease with Ironclad Equipment Leasing Co. covered a smaller,
+      three-unit fleet and was cancelled early after the buyer returned the equipment ahead of
+      relocating the affected distribution center.</p>
+
+  # --- Wescott Printing & Stationery Ltd. ---
+  - key: "wescott-printing-stationery-2023"
+    party_type: "Supplier"
+    party_name: "Wescott Printing & Stationery Ltd."
+    status: "Inactive"
+    docstatus: 1
+    is_signed: true
+    start_date: "2023-01-01"
+    end_date: "2023-12-31"
+    contract_terms_html: |
+      <p>This agreement covered the supply of printed marketing collateral and office
+      stationery by Wescott Printing & Stationery Ltd., billed under the deprecated Net 60
+      payment terms in effect at the time.</p>
+
+  # --- Greenfield Waste Management Ltd. ---
+  - key: "greenfield-waste-management-2026"
+    party_type: "Supplier"
+    party_name: "Greenfield Waste Management Ltd."
+    status: "Active"
+    docstatus: 1
+    is_signed: true
+    start_date: "2025-01-01"
+    end_date: "2026-12-31"
+    contract_terms_html: |
+      <p>This agreement covers scheduled waste collection, recycling, and disposal services
+      provided by Greenfield Waste Management Ltd. across all buyer facilities.</p>
+      <p><strong>Compliance.</strong> Greenfield shall provide quarterly waste diversion
+      reports sufficient to support the buyer's sustainability disclosures.</p>
+
+  # --- Voyager Travel & Events Ltd. ---
+  - key: "voyager-travel-events-2026"
+    party_type: "Supplier"
+    party_name: "Voyager Travel & Events Ltd."
+    status: "Unsigned"
+    docstatus: 0
+    is_signed: false
+    start_date: "2026-07-01"
+    end_date: "2027-06-30"
+    contract_terms_html: |
+      <p>This proposed agreement would appoint Voyager Travel & Events Ltd. as the buyer's
+      preferred provider for corporate travel booking and internal event management.</p>
+
+  # --- Harvest Catering Supplies Ltd. ---
+  - key: "harvest-catering-supplies-2026"
+    party_type: "Supplier"
+    party_name: "Harvest Catering Supplies Ltd."
+    status: "Active"
+    docstatus: 1
+    is_signed: true
+    start_date: "2026-01-01"
+    end_date: "2026-12-31"
+    contract_terms_html: |
+      <p>This agreement covers weekly delivery of office catering supplies and pantry stock by
+      Harvest Catering Supplies Ltd. to all buyer office locations.</p>
+      <p><strong>Payment Terms.</strong> Payment is due within 30 days of invoice date
+      (Net 30).</p>
+
+  # --- Blackstone Construction & Fit-Out Ltd. ---
+  - key: "blackstone-construction-fitout-2026"
+    party_type: "Supplier"
+    party_name: "Blackstone Construction & Fit-Out Ltd."
+    status: "Unsigned"
+    docstatus: 0
+    is_signed: false
+    start_date: "2026-08-01"
+    end_date: "2027-02-28"
+    contract_terms_html: |
+      <p>This proposed agreement would engage Blackstone Construction & Fit-Out Ltd. to deliver
+      a full interior fit-out of the buyer's new regional office, on a fixed-price basis with
+      milestone payments tied to inspection sign-off.</p>
+
+  # --- Quantum Data Analytics Inc. ---
+  - key: "quantum-analytics-platform-2026"
+    party_type: "Supplier"
+    party_name: "Quantum Data Analytics Inc."
+    status: "Active"
+    docstatus: 1
+    is_signed: true
+    start_date: "2026-01-01"
+    end_date: "2026-12-31"
+    contract_terms_html: |
+      <p>This agreement covers a subscription to Quantum Data Analytics Inc.'s spend-analytics
+      platform, including data pipeline integration with the buyer's ERP system.</p>
+      <p><strong>Data Processing.</strong> Quantum processes buyer data solely for the purpose
+      of providing the contracted analytics services and shall not use it to train models for
+      other customers.</p>
+    pdf_attachment:
+      title: "Quantum Data Analytics Inc. — Data Processing Addendum"
+      clauses:
+        - heading: "Purpose Limitation"
+          body: >
+            Quantum Data Analytics Inc. shall process buyer data solely for the purpose of
+            providing the contracted analytics services, and shall not use buyer data to
+            train models or features for any other customer.
+        - heading: "Data Deletion"
+          body: >
+            Upon termination of this agreement, Quantum shall permanently delete all buyer
+            data from its systems within thirty (30) days, and shall certify deletion in
+            writing upon request.
+
+  - key: "quantum-analytics-onboarding-2026"
+    party_type: "Supplier"
+    party_name: "Quantum Data Analytics Inc."
+    status: "Unsigned"
+    docstatus: 0
+    is_signed: false
+    start_date: "2026-05-01"
+    end_date: "2026-11-30"
+    contract_terms_html: |
+      <p>This proposed pilot onboarding phase would precede the full Quantum Data Analytics
+      Inc. platform subscription, covering data pipeline setup and user acceptance testing
+      only.</p>
+
+  # --- Sterling Office Furnishings Ltd. ---
+  - key: "sterling-office-furnishings-2024"
+    party_type: "Supplier"
+    party_name: "Sterling Office Furnishings Ltd."
+    status: "Inactive"
+    docstatus: 1
+    is_signed: true
+    start_date: "2024-06-01"
+    end_date: "2025-05-31"
+    contract_terms_html: |
+      <p>This agreement covered the supply and installation of desks, chairs, and storage
+      furniture by Sterling Office Furnishings Ltd. for the buyer's now-closed downtown office.</p>
