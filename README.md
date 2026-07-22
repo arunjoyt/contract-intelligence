@@ -4,13 +4,18 @@ A production-grade RAG application that answers natural language contract querie
 
 ## What It Does
 
-Query your contract data in plain English:
+Query your contract data in plain English. Each example below exercises a different part of the
+architecture:
 
-- "What are the payment terms in our contract with Alpha Supplies Ltd?"
-- "Which contracts are expiring in the next 60 days?"
-- "What are the warranty and return terms across our contracts?"
-- "Are there any unsigned contracts pending?"
-- "Summarize all penalty clauses across active contracts."
+| Capability | Example question |
+|---|---|
+| Hybrid search — exact term (BM25) | "What penalty applies if Zuckerman Security Ltd. exceeds two service level incidents in a quarter?" |
+| Hybrid search — paraphrase (vector) | "Which supplier bears the cost of replacing defective goods delivered under warranty?" |
+| Cross-document synthesis (reranker) | "Compare the payment terms across our contracts with Alpha Supplies Ltd. and Summit Traders Ltd." |
+| HyDE query rewriting (abstract question) | "What recourse do we have if a security services vendor doesn't perform to the agreed standard?" |
+| Plain-language ↔ exact-value interpretation | "Has our contract with Zuckerman Security Ltd. been signed yet?" |
+| Grounded refusal (no hallucination) | "What's our contract value with a supplier called Globex Corp?" |
+| PDF ingestion | "What is Zuckerman Security Ltd.'s liability cap under the signed contract PDF, and how quickly can either party terminate for cause?" |
 
 ## Architecture
 
