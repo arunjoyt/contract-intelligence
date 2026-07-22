@@ -20,6 +20,7 @@ import os
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from typing import Any
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
@@ -142,10 +143,12 @@ def health() -> dict[str, str]:
 @app.post("/query")
 def query(req: QueryRequest, _user: dict = Depends(require_allowed_role)) -> dict[str, Any]:  # noqa: B008
     result = app.state.pipeline.run(req.question, filters=req.filters)
-    return {
-        "answer": result["answer"],
-        "sources": [asdict(s) for s in result["sources"]],
-    }
+    sources = []
+    for s in result["sources"]:
+        source = asdict(s)
+        source["erpnext_url"] = _erpnext_record_url(s.source_doctype, s.docname)
+        sources.append(source)
+    return {"answer": result["answer"], "sources": sources}
 
 
 @app.post("/ingest/full", status_code=202)
@@ -226,6 +229,17 @@ async def _run_full_ingest(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _erpnext_record_url(source_doctype: str, docname: str) -> str:
+    """Build the ERPNext desk URL for a cited source record.
+
+    Doctype slugs follow Frappe's own routing convention: lowercased, spaces
+    replaced with hyphens (e.g. "Terms and Conditions" -> "terms-and-conditions").
+    """
+    slug = source_doctype.lower().replace(" ", "-")
+    base_url = os.environ["ERPNEXT_URL"].rstrip("/")
+    return f"{base_url}/app/{slug}/{quote(docname, safe='')}"
 
 
 def _check_admin_secret(provided: str | None) -> None:

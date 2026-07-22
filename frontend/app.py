@@ -6,6 +6,7 @@ Sources expander.  Sidebar filters are merged into the request payload.
 
 from __future__ import annotations
 
+import html
 import os
 
 import httpx
@@ -39,10 +40,18 @@ show_logout_button()
 def _render_sources(sources: list[dict]) -> None:
     with st.expander(f"Sources ({len(sources)})"):
         for s in sources:
-            line = f"**{s['docname']}** &nbsp;·&nbsp; {s['source_doctype']}"
+            docname = html.escape(s["docname"])
+            url = s.get("erpnext_url")
+            docname_html = (
+                f'<a href="{html.escape(url)}" target="_blank" '
+                f'rel="noopener noreferrer">{docname}</a>'
+                if url
+                else docname
+            )
+            line = f"<b>{docname_html}</b> &nbsp;·&nbsp; {html.escape(s['source_doctype'])}"
             if s.get("supplier"):
-                line += f" &nbsp;·&nbsp; {s['supplier']}"
-            st.markdown(line)
+                line += f" &nbsp;·&nbsp; {html.escape(s['supplier'])}"
+            st.markdown(line, unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
