@@ -158,6 +158,28 @@ def test_query_returns_answer_and_sources(client, mock_pipeline):
     assert data["sources"][0]["docname"] == "PO-001"
     assert data["sources"][0]["source_doctype"] == "Purchase Order"
     assert data["sources"][0]["supplier"] == "Acme Corp"
+    assert data["sources"][0]["erpnext_url"] == "http://localhost:8005/app/purchase-order/PO-001"
+
+
+def test_query_erpnext_url_encodes_docname_with_spaces(client, mock_pipeline):
+    mock_pipeline.run.return_value = {
+        "answer": "See terms. [Standard Purchase Terms - Net 30]",
+        "sources": [
+            SourceDoc(
+                docname="Standard Purchase Terms - Net 30",
+                source_doctype="Terms and Conditions",
+                supplier=None,
+                chunk_index=0,
+            )
+        ],
+    }
+    resp = client.post("/query", json={"question": "What are the terms?"}, headers=_auth())
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["sources"][0]["erpnext_url"] == (
+        "http://localhost:8005/app/terms-and-conditions/"
+        "Standard%20Purchase%20Terms%20-%20Net%2030"
+    )
 
 
 def test_query_passes_question_to_pipeline(client, mock_pipeline):
