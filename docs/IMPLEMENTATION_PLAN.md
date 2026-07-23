@@ -346,7 +346,7 @@ locally with mkcert certs.
 ## Step 17 — `tests/e2e/` — ERPNext Desk E2E Test Suite (Playwright)
 
 **Status: implemented and executed live** (2026-07-23, `RUN_E2E=1` against this project's dev
-ERPNext site, with `playwright install chromium`). Result: **8 passed, 1 xfailed (confirmed
+ERPNext site, with `playwright install chromium`). Result: **10 passed, 1 xfailed (confirmed
 platform limitation, not a bug), 1 failed (real, unfixed config gap)** — see below. Two real,
 previously-unknown findings surfaced purely from actually running this against live
 infrastructure, not from writing the tests:
@@ -395,7 +395,8 @@ tests/e2e/
 ├── test_webhook_config.py                    # REST assertions: records exist, enabled, correct doctype/event/URL (5 tests)
 ├── test_erpnext_desk_submit.py               # Desk submit Contract (+ PDF attachment) → poll Qdrant → assert indexed (2 tests)
 ├── test_erpnext_desk_update_after_submit.py  # Desk is_signed toggle + resave on submitted Contract → poll Qdrant (2 tests)
-└── test_erpnext_desk_cancel.py               # Desk cancel → poll Qdrant → assert status=Cancelled (webhook_handler re-indexes, doesn't delete) (1 test)
+├── test_erpnext_desk_cancel.py               # Desk cancel → poll Qdrant → assert status=Cancelled (webhook_handler re-indexes, doesn't delete) (1 test)
+└── test_streamlit_frontend.py                # Real browser against a running Streamlit + FastAPI, nothing mocked (2 tests)
 ```
 
 **Test coverage and live result:**
@@ -406,8 +407,11 @@ tests/e2e/
 | `test_erpnext_desk_submit.py` | 2 | Webhook not firing on Desk submit | 2 passed |
 | `test_erpnext_desk_update_after_submit.py` | 2 | `on_update` not firing on a post-submit Desk save | 1 xfailed (confirmed gap), 1 passed (repeated saves stay inert, no corruption) |
 | `test_erpnext_desk_cancel.py` | 1 | Cancel not propagating to Qdrant (re-index with status=Cancelled) | 1 passed |
+| `test_streamlit_frontend.py` | 2 | Frontend-level regressions AppTest can't see (real render, real network, real OpenAI round trip) | 2 passed |
 
-**Streamlit UI** is tested separately via `streamlit.testing.v1.AppTest` (in-process, no browser, no running server) — `tests/test_streamlit.py`, 3 cases: basic query renders, sidebar supplier filter wires correct param to API, connection error shows a message without crashing. Implemented and passing as part of the normal `pytest tests/` unit suite.
+**`test_streamlit_frontend.py`** drives an actual running Streamlit server (`streamlit run frontend/app.py`) through a real Chromium browser against the real FastAPI backend — the full browser → Streamlit → FastAPI → pipeline → Qdrant → OpenAI → browser round trip, nothing mocked. This is a different, complementary layer from `tests/test_streamlit.py` (below): AppTest verifies UI *logic* fast and in-process with `httpx.post` mocked; this verifies the same UI actually *renders and works* end-to-end. Login is bypassed by minting a JWT directly (`api.auth.jwt_handler.mint_token`, the same function `/auth/callback` calls after a real OAuth exchange) and navigating to `{FRONTEND_URL}/?token=<jwt>`, rather than driving ERPNext's OAuth consent screen through the browser (already covered by `conftest.py`'s Desk login and by `test_integration.py`'s auth group). The sidebar-filter test intentionally only asserts the query completes without error, not that results are strictly scoped to the filter — `docs/ARCHITECTURE.md`'s "Filter behaviour" section documents that metadata filters only narrow the Qdrant leg of hybrid search, so a supplier filter doesn't guarantee every returned source matches (confirmed empirically while writing this test).
+
+**`tests/test_streamlit.py`** (separate file, **not** gated by `RUN_E2E` — runs as part of the normal `pytest tests/` unit suite on every push) tests the same UI via `streamlit.testing.v1.AppTest` (in-process, no browser, no running server, `httpx.post` mocked): basic query renders, sidebar supplier filter wires correct param to API, connection error shows a message without crashing. 3 cases, implemented and passing.
 
 **Run:**
 ```bash
