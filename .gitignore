@@ -41,6 +41,9 @@ Thumbs.db
 *.pt
 evaluation/results.json
 
+# Integration test results (scripts/run_integration.sh)
+test-results/
+
 # Docker
 docker-compose.override.yml
 docker-compose.local-prod.yml

@@ -247,4 +247,4 @@ GitHub Actions runs on every push:
 - `pytest tests/` — unit tests (no network required; OpenAI and Qdrant are mocked)
 - On merge to `main`: RAGAS evaluation with results uploaded as artifact
 
-Integration tests (`tests/test_integration.py`) require a live ERPNext + Qdrant instance and are opt-in via `RUN_INTEGRATION=1`.
+Integration tests (`tests/test_integration.py`) require a live ERPNext + Qdrant instance and are opt-in via `RUN_INTEGRATION=1`. Run `./scripts/run_integration.sh` (optionally passing pytest args, e.g. `-m langfuse`) to save a durable log + JUnit XML copy of the results under `test-results/` (gitignored) instead of only having them in your terminal scrollback.
