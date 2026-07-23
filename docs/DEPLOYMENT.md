@@ -509,6 +509,107 @@ see the security issue about hardcoding these, #65) come from `docker-compose.ym
 
 ---
 
+## `scripts/backup_all.sh` — running all three backups in one command
+
+`scripts/backup_all.sh` wraps the ERPNext bench backup, Qdrant snapshot, and Langfuse Postgres dump
+above into a single script, so a routine backup doesn't mean copy-pasting three sets of commands by
+hand.
+
+```bash
+./scripts/backup_all.sh
+```
+
+**Configuration** — every path/name the script uses is overridable via environment variable, but none
+of the machine-specific ones (bench binary/dir, site name, backup destination root) have a default
+baked into the script itself. Copy `scripts/backup_all.local.sh.example` to `scripts/backup_all.local.sh`
+(gitignored, sourced automatically if present — mirrors how `CLAUDE.local.md` holds machine-specific
+setup for this repo) and fill in:
+
+```bash
+export BENCH_BIN="/path/to/venv/bin/bench"
+export BENCH_DIR="/path/to/benches/<bench-name>"
+export SITE_NAME="<site-name>"
+
+# Optional overrides (defaults shown) — uncomment only what differs on your machine:
+# export QDRANT_URL="http://localhost:6333"
+# export QDRANT_COLLECTION="contract"
+# export QDRANT_CONTAINER="contract-intelligence-qdrant-1"
+# export POSTGRES_CONTAINER="contract-intelligence-postgres-1"
+# export POSTGRES_USER="langfuse"
+# export POSTGRES_DB="langfuse"
+# export BACKUP_ROOT="$HOME/contract-intelligence-backups"
+```
+
+**What it does, per step:**
+
+1. **ERPNext bench** — `bench --site $SITE_NAME backup --with-files`, run from `$BENCH_DIR`. Output
+   lands in the bench's own `sites/<site-name>/private/backups/` (see "ERPNext Bench Backup & Restore"
+   above), not under `$BACKUP_ROOT`.
+2. **Qdrant snapshot** — creates a snapshot of the `$QDRANT_COLLECTION` collection via the same
+   snapshot API as above, copies it (plus its `.checksum`) out of the container with `docker cp`, and
+   verifies the checksum locally before reporting success. Lands in `$BACKUP_ROOT/qdrant/`.
+3. **Langfuse Postgres** — `pg_dump -F c`, copied out of the container, verified with
+   `pg_restore --list` before reporting success. Lands in `$BACKUP_ROOT/postgres/`.
+
+Each step is timestamped independently and **skips with a warning rather than failing the whole run**
+if its prerequisites aren't met — e.g. no local bench on a VPS, or a container that isn't up. The
+script's own exit code is non-zero if any attempted step failed (as opposed to being skipped), so it's
+safe to wire into cron/CI for a non-zero-on-failure check. `.env` is deliberately left out — see below.
+
+---
+
+## `scripts/restore_all.sh` — restoring all three stores in one command
+
+`scripts/restore_all.sh` is the restore-side counterpart to `backup_all.sh` above, wrapping the same
+three per-store restore commands into a single script.
+
+```bash
+./scripts/restore_all.sh          # prompts for confirmation
+./scripts/restore_all.sh --yes    # skips the prompt, e.g. for scripted use
+```
+
+⚠️ **DESTRUCTIVE**: each step it runs overwrites live data (the ERPNext site's database and files, the
+Qdrant collection, the Langfuse database) with the backup file you point it at.
+
+**Configuration** — unlike `backup_all.sh`, **nothing is auto-selected**: copy
+`scripts/restore_all.local.sh.example` to `scripts/restore_all.local.sh` (gitignored) and set each
+variable to the exact backup file to restore. The script refuses to run at all if
+`restore_all.local.sh` doesn't exist.
+
+```bash
+export BENCH_BIN="/path/to/venv/bin/bench"
+export BENCH_DIR="/path/to/benches/<bench-name>"
+export SITE_NAME="<site-name>"
+
+# All three ERPNext files must be from the same backup run (same timestamp prefix).
+export ERPNEXT_RESTORE_DB="/path/to/.../<timestamp>-<site-name>-database.sql.gz"
+export ERPNEXT_RESTORE_PRIVATE_FILES="/path/to/.../<timestamp>-<site-name>-private-files.tar"
+export ERPNEXT_RESTORE_PUBLIC_FILES="/path/to/.../<timestamp>-<site-name>-files.tar"
+
+export QDRANT_RESTORE_SNAPSHOT="/path/to/backups/qdrant/<snapshot-file>.snapshot"
+export POSTGRES_RESTORE_DUMP="/path/to/backups/postgres/<dump-file>.pgdump"
+```
+
+A variable left empty/commented **skips that store's restore entirely** — e.g. set only
+`QDRANT_RESTORE_SNAPSHOT` to restore Qdrant without touching ERPNext or Postgres.
+
+**What it does, per step:**
+
+1. **ERPNext bench** — `bench --site $SITE_NAME restore $ERPNEXT_RESTORE_DB`, adding
+   `--with-private-files`/`--with-public-files` only for whichever of those two vars is set and points
+   at an existing file.
+2. **Qdrant** — verifies the snapshot's `.checksum` (refuses to restore on a mismatch; warns and
+   proceeds unverified if no `.checksum` file is found next to it), then uploads it via the snapshot
+   restore API. Prints a reminder to restart the API afterward so `hybrid_search`'s in-memory BM25
+   index rebuilds from the restored data.
+3. **Langfuse Postgres** — `pg_restore --clean --if-exists` against the running `postgres` container.
+
+Before doing anything, it prints exactly which restores will run and against what files, then requires
+typing `RESTORE` to confirm (or `--yes` to skip the prompt). Its exit code is non-zero if any attempted
+step failed.
+
+---
+
 ## `.env` — the one thing that blocks every restore above
 
 `.env` is gitignored by design (see `ingestion/erpnext_client.py`, `pipeline/query_pipeline.py`, etc. —
