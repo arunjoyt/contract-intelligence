@@ -196,6 +196,37 @@ def delete_contract_via_rest(docname: str) -> None:
         )
 
 
+def delete_qdrant_points_for_docname(docname: str) -> None:
+    """Best-effort delete of a docname's points from the *production* Qdrant
+    collection. `on_cancel` re-indexes with status="Cancelled" rather than
+    removing points (see docs/DEPLOYMENT.md), so cleanup must do this
+    explicitly -- otherwise every test run leaves its points permanently
+    discoverable by the real /query pipeline (see #95)."""
+    with contextlib.suppress(Exception):
+        httpx.post(
+            f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/delete",
+            json={"filter": {"must": [{"key": "docname", "match": {"value": docname}}]}},
+            timeout=10,
+        )
+
+
+def cleanup_contract(docname: str) -> None:
+    """Full best-effort teardown for a test Contract, safe to call from a
+    `finally` block: cancel it (no-op if already cancelled/still draft),
+    delete the ERPNext document, and delete its Qdrant points. Each step
+    independently suppresses errors so one failing step (e.g. already
+    cancelled) doesn't block the rest.
+
+    Replaces bare `cancel_contract_via_rest` as the standard finally-block
+    cleanup -- cancelling alone left every test Contract permanently in
+    ERPNext *and* permanently indexed in the production Qdrant collection
+    real /query requests hit (see #95).
+    """
+    cancel_contract_via_rest(docname)
+    delete_contract_via_rest(docname)
+    delete_qdrant_points_for_docname(docname)
+
+
 # ---------------------------------------------------------------------------
 # Qdrant polling helpers -- read the *production* collection the live app
 # writes to (mirrors tests/test_integration.py Group 9's approach).

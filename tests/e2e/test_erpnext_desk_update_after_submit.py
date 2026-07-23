@@ -39,7 +39,7 @@ from tests.e2e.conftest import (
     set_is_signed_and_update,
     submit_contract_via_rest,
 )
-from tests.e2e.conftest import cancel_contract_via_rest as _cancel
+from tests.e2e.conftest import cleanup_contract as _cleanup
 
 _XFAIL_REASON = (
     "Confirmed via Frappe's Webhook Request Log (2026-07-23): on_update does not "
@@ -72,7 +72,7 @@ def test_contract_desk_is_signed_change_after_submit_triggers_reindex(desk_page)
             "-- on_update may not be firing for post-submit Desk saves on Contract"
         )
     finally:
-        _cancel(docname)
+        _cleanup(docname)
 
 
 @live
@@ -104,4 +104,4 @@ def test_contract_desk_repeated_saves_do_not_silently_corrupt_index(desk_page) -
             "have fired -- investigate before assuming this is still just the known gap"
         )
     finally:
-        _cancel(docname)
+        _cleanup(docname)

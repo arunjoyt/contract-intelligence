@@ -35,7 +35,7 @@ from tests.e2e.conftest import (
     ERPNEXT_URL,
     FRONTEND_URL,
     attach_test_pdf,
-    cancel_contract_via_rest,
+    cleanup_contract,
     click_primary_action,
     create_draft_contract,
     live,
@@ -104,7 +104,7 @@ def test_contract_desk_submitted_content_is_answerable_via_streamlit_ui(desk_pag
             f"Answer was: {answer_text!r}"
         )
     finally:
-        cancel_contract_via_rest(docname)
+        cleanup_contract(docname)
 
 
 @live
@@ -139,7 +139,7 @@ def test_contract_desk_submitted_pdf_content_is_answerable_via_streamlit_ui(
             f"Answer was: {answer_text!r}"
         )
     finally:
-        cancel_contract_via_rest(docname)
+        cleanup_contract(docname)
 
 
 @live
@@ -182,4 +182,4 @@ def test_contract_desk_cancel_status_is_reflected_in_streamlit_ui(desk_page, pag
             f"after a Desk cancel.\nAnswer was: {answer_text!r}"
         )
     finally:
-        cancel_contract_via_rest(docname)  # no-op if already cancelled
+        cleanup_contract(docname)  # no-op cancel if already cancelled
