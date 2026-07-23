@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import secrets
@@ -21,7 +22,17 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 # fires it twice, sending two requests for the same code/state before the first
 # navigation completes. Cache completed logins briefly so the replay gets the same
 # redirect instead of a confusing "invalid state" error after a successful login.
+#
+# The cache entry is keyed by `state` but also binds the original `code` (hashed) --
+# a hit only replays the cached redirect if the request's `code` matches too. Without
+# this, anyone who obtains just the `state` value (e.g. from proxy access logs) within
+# the TTL window gets served the same valid JWT with an arbitrary `code`, skipping PKCE
+# validation entirely. See issue #64.
 _OAUTH_COMPLETED_TTL_SECONDS = 60
+
+
+def _hash_code(code: str) -> str:
+    return hashlib.sha256(code.encode()).hexdigest()
 
 
 def _allowed_roles() -> list[str]:
@@ -42,15 +53,17 @@ async def login(request: Request) -> RedirectResponse:
 
 @router.get("/callback")
 async def callback(request: Request, code: str, state: str) -> RedirectResponse:
-    completed: dict[str, tuple[float, str]] = request.app.state.oauth_completed
+    completed: dict[str, tuple[float, str, str]] = request.app.state.oauth_completed
     now = time.monotonic()
-    for cached_state, (completed_at, _) in list(completed.items()):
+    for cached_state, (completed_at, _, _) in list(completed.items()):
         if now - completed_at > _OAUTH_COMPLETED_TTL_SECONDS:
             del completed[cached_state]
 
     if state in completed:
-        _, redirect_url = completed[state]
-        return RedirectResponse(redirect_url)
+        _, cached_code_hash, redirect_url = completed[state]
+        if secrets.compare_digest(cached_code_hash, _hash_code(code)):
+            return RedirectResponse(redirect_url)
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
 
     code_verifier: str | None = request.app.state.oauth_state.pop(state, None)
     if not code_verifier:
@@ -70,5 +83,5 @@ async def callback(request: Request, code: str, state: str) -> RedirectResponse:
     jwt_token = mint_token(username=username, roles=roles)
     frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:8501")
     redirect_url = f"{frontend_url}?token={jwt_token}"
-    completed[state] = (now, redirect_url)
+    completed[state] = (now, _hash_code(code), redirect_url)
     return RedirectResponse(redirect_url)
