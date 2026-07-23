@@ -208,17 +208,21 @@ Metadata filters (supplier, doctype, status) apply **only to the Qdrant vector-s
 
 ## Observability
 
-Every query creates a Langfuse trace with the following spans:
+Every query creates a Langfuse trace with the following child observations:
 
-| Span | Input captured | Output captured |
-|---|---|---|
-| `rewrite` | original question | rewritten text + query vector |
-| `filter_extraction` | original question | `{source_doctype?, status?}` dict |
-| `hybrid_search` | rewritten query + filters | list of 20 scored chunks |
-| `rerank` | original question + 20 candidates | top-5 re-scored chunks |
-| `generate` | original question + context string | answer with `[docname]` citations |
+| Observation | Type | Input captured | Output captured |
+|---|---|---|---|
+| `rewrite` | span | original question | rewritten text + query vector |
+| `filter_extraction` | span | original question | `{source_doctype?, status?}` dict |
+| `hybrid_search` | span | rewritten query + filters | list of 20 scored chunks |
+| `rerank` | span | original question + 20 candidates | top-5 re-scored chunks |
+| `generate` | generation | original question + context string | answer with `[docname]` citations |
 
 The trace root carries `input.question` and `output.{answer, source_count}`. If any step raises, the failing span and the root trace are both updated with `level="ERROR"`.
+
+`generate` is a Langfuse **generation** (not a plain span) — it's created with `trace.generation(model=OPENAI_MODEL)` and passes `usage={"input", "output", "total"}` (from the OpenAI response's `.usage`) to `end()`. Only `generation`-type observations get token counts and cost auto-computed by Langfuse; a plain span just stores whatever input/output you hand it (see PR [#87](https://github.com/arunjoyt/contract-intelligence/pull/87), issue #81).
+
+**Not traced: embedding calls.** `ingestion/embedder.py`'s `Embedder` (used both for HyDE query embedding at query time and for chunk embedding during ingestion) is intentionally left trace-agnostic — it has no Langfuse dependency and isn't passed a trace/span object by any caller. Wiring it in would mean threading trace context through the ingestion path (full ingest, webhook re-index) as well as the query path, for comparatively little signal: embedding cost (`text-embedding-3-small`) is negligible next to GPT-4o generation cost. Revisit if embedding volume or cost grows enough to matter.
 
 The Langfuse UI is accessible at `http://localhost:3000` (default docker-compose port).
 
@@ -230,8 +234,9 @@ The Langfuse UI is accessible at `http://localhost:3000` (default docker-compose
 4. Send a query: `curl -s -X POST http://localhost:8000/query -H 'Content-Type: application/json' -d '{"question":"What are the payment terms for our active contracts?"}'`
 5. In the Langfuse UI → **Traces** → select the new trace and verify:
    - Root trace `name` is `query`; `input.question` matches the sent question
-   - Five child spans appear: `rewrite`, `filter_extraction`, `hybrid_search`, `rerank`, `generate`
-   - Each span has a non-zero duration and no error level
+   - Five child observations appear: `rewrite`, `filter_extraction`, `hybrid_search`, `rerank`, `generate`
+   - Each has a non-zero duration and no error level
+   - `generate` shows non-zero `Total tokens` and a computed cost (it's a `generation`, not a plain span)
    - Root trace `output.answer` is non-empty and contains at least one `[docname]`-style citation
    - On a forced error, `level` is `ERROR` on the failing span and propagates to the root trace
 
