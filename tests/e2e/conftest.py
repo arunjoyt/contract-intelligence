@@ -16,11 +16,10 @@ Requires (not installed/run by default -- see README's Integration Tests section
     since ERPNext's webhook fires against whatever URL its Webhook records point to --
     this suite does not start the app itself.
 
-NOTE ON SELECTORS: the Desk UI locators below (#login_email, [data-fieldname=...],
-role=button names) follow Frappe's documented, version-stable conventions, but have
-not been exercised against a live browser as part of building this scaffold --
-verify against the target Frappe version on first real run (see docs/IMPLEMENTATION_PLAN.md
-Step 17 for context on why this suite was added un-executed).
+NOTE ON SELECTORS: the Desk UI locators below have been verified against a live
+Frappe/ERPNext instance (see docs/IMPLEMENTATION_PLAN.md Step 17 for the live-run
+results and the bugs that live run found and fixed) -- re-verify if the target
+Frappe version differs meaningfully from the one this was built against.
 """
 
 from __future__ import annotations
@@ -48,9 +47,20 @@ live = pytest.mark.skipif(
 ERPNEXT_URL = os.environ.get("ERPNEXT_URL", "http://127.0.0.1:8005")
 APP_URL = os.environ.get("API_URL", "http://localhost:8000")
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:8501")
 # Whatever collection the *live app process* is configured with -- webhook-triggered
 # re-indexing lands there, not in any dedicated test collection we could create here.
 QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "contract")
+
+
+def mint_test_jwt(username: str = "e2e-test") -> str:
+    """Mint a JWT the same way `/auth/callback` does after a real OAuth exchange
+    (`api.auth.jwt_handler.mint_token`), so browser tests can log into the
+    Streamlit frontend via `{FRONTEND_URL}/?token=<jwt>` without driving
+    ERPNext's OAuth consent screen through the browser."""
+    from api.auth.jwt_handler import mint_token
+
+    return mint_token(username=username, roles=["System Manager"])
 
 
 # ---------------------------------------------------------------------------
@@ -72,11 +82,15 @@ def _erp_headers() -> dict:
     return {"Authorization": f"token {key}:{secret}"}
 
 
-def create_draft_contract() -> tuple[str, str]:
+def create_draft_contract(
+    contract_terms: str = "<p>E2E test contract terms.</p>",
+) -> tuple[str, str]:
     """Create a minimal draft Contract via REST. Returns (docname, supplier).
 
-    REST is fine for setup -- the thing under test is the Desk UI *action*
-    (submit/save/cancel), not document creation.
+    REST is fine for setup -- the thing under test is usually the Desk UI
+    *action* (submit/save/cancel), not document creation. `contract_terms` is
+    overridable so a test can plant distinctive, uniquely-searchable content
+    (see test_erpnext_to_streamlit_loop.py).
     """
     headers = _erp_headers()
     supplier = (
@@ -103,7 +117,7 @@ def create_draft_contract() -> tuple[str, str]:
             "party_name": supplier,
             "start_date": start_date,
             "end_date": end_date,
-            "contract_terms": "<p>E2E test contract terms.</p>",
+            "contract_terms": contract_terms,
         },
         headers=headers,
         timeout=15,
@@ -140,19 +154,20 @@ def cancel_contract_via_rest(docname: str) -> None:
         )
 
 
-def attach_test_pdf(docname: str, paragraphs: int = 1) -> str:
+def attach_test_pdf(docname: str, paragraphs: int = 1, line: str | None = None) -> str:
     """Generate a minimal PDF via reportlab and attach it to a Contract via REST.
     Returns the generated filename. `paragraphs` controls text volume -- pass
     enough to push the doc's combined text over chunk_size=512 when a test needs
     to force multiple chunks (a single short paragraph plus the default
-    `contract_terms` text normally chunks to just one).
+    `contract_terms` text normally chunks to just one). `line` overrides the
+    repeated filler text -- pass distinctive content a test needs to search for.
     """
     from reportlab.pdfgen import canvas
 
     buffer = BytesIO()
     c = canvas.Canvas(buffer)
     y = 750
-    line = "E2E test PDF attachment content, repeated to pad chunk length. "
+    line = line or "E2E test PDF attachment content, repeated to pad chunk length. "
     for i in range(paragraphs):
         c.drawString(72, y, f"{i}: {line}")
         y -= 20
