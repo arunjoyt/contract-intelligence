@@ -248,3 +248,5 @@ GitHub Actions runs on every push:
 - On merge to `main`: RAGAS evaluation with results uploaded as artifact
 
 Integration tests (`tests/test_integration.py`) require a live ERPNext + Qdrant instance and are opt-in via `RUN_INTEGRATION=1`. Run `./scripts/run_integration.sh` (optionally passing pytest args, e.g. `-m langfuse`) to save a durable log + self-contained HTML report under `test-results/` (gitignored) instead of only having them in your terminal scrollback.
+
+A separate, browser-driven E2E suite (`tests/e2e/`, Playwright) drives the real ERPNext Desk UI to catch webhook-firing bugs the REST-based integration tests structurally can't see — see `docs/IMPLEMENTATION_PLAN.md` Step 17. One-time setup: `playwright install chromium`, then `RUN_E2E=1 pytest tests/e2e/ -v`. The Streamlit frontend has its own fast, no-browser test layer at `tests/test_streamlit.py` (`streamlit.testing.v1.AppTest`), which runs as part of the normal `pytest tests/` unit suite.

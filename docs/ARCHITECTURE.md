@@ -302,26 +302,32 @@ Run with `pytest tests/ -v`. No network. Required to pass in CI on every push.
 
 ### Layer 2 — Backend integration tests (`tests/test_integration.py`)
 
-Nine groups that hit real services. Gated by `RUN_E2E=1` → `RUN_INTEGRATION=1`. Covers the full backend stack: ERPNext REST → ingestion → Qdrant → retrieval → pipeline → GPT-4o → Langfuse tracing. Streamlit is checked only with `httpx.get` → HTTP 200. Not in CI.
+Nine groups that hit real services. Gated by `RUN_INTEGRATION=1`. Covers the full backend stack: ERPNext REST → ingestion → Qdrant → retrieval → pipeline → GPT-4o → Langfuse tracing. Streamlit is checked only with `httpx.get` → HTTP 200. Not in CI.
 
 ERPNext is driven via **REST API** (`frappe.client.submit`, `frappe.client.save`) — this does not exercise the Frappe background worker queue that fires webhooks in the real Desk path.
 
-### Layer 3 — E2E Desk UI tests (`tests/e2e/`, Playwright) — planned, not yet implemented
+### Layer 3 — E2E Desk UI tests (`tests/e2e/`, Playwright) — scaffolded, not yet executed against a live browser
 
 Playwright drives the **ERPNext Desk UI in a real Chromium browser**, exercising the same code path a user takes. This layer exists to catch a class of bugs that REST-API integration tests cannot:
 
 **Three bugs found only via Desk UI:**
 1. Webhook records not configured in ERPNext.
 2. Webhooks configured but not firing (URL wrong, disabled, worker queue not running).
-3. `on_update_after_submit` event not triggering a webhook after a desk save on a submitted PO.
+3. `on_update` not firing on a Desk save to an already-submitted Contract (Contract's `status` field is `allow_on_submit`, so this is a legal edit).
 
-Planned test files and what each catches:
+Test files and what each catches (gated by `RUN_E2E=1`):
 
-| File | Browser? | Catches |
-|---|---|---|
-| `test_webhook_config.py` | No (REST) | Missing / misconfigured webhook records |
-| `test_erpnext_desk_submit.py` | Yes | Webhook not firing on Desk submit |
-| `test_erpnext_desk_update_after_submit.py` | Yes | `on_update_after_submit` gap |
-| `test_erpnext_desk_cancel.py` | Yes | Cancel not propagating to Qdrant removal |
+| File | Browser? | Catches | Status |
+|---|---|---|---|
+| `test_webhook_config.py` | No (REST) | Missing / misconfigured webhook records | Implemented, run live |
+| `test_erpnext_desk_submit.py` | Yes | Webhook not firing on Desk submit | Scaffolded, not yet run live |
+| `test_erpnext_desk_update_after_submit.py` | Yes | Post-submit Desk save not re-indexing | Scaffolded, not yet run live |
+| `test_erpnext_desk_cancel.py` | Yes | Cancel not propagating to Qdrant (status=Cancelled) | Scaffolded, not yet run live |
 
-Streamlit UI is tested separately via `streamlit.testing.v1.AppTest` (in-process, no browser). See `docs/IMPLEMENTATION_PLAN.md` Step 17 for the full implementation plan.
+Running `test_webhook_config.py` against this project's dev ERPNext site found a real gap: the
+`terms-on-update` webhook required by `docs/DEPLOYMENT.md`'s table doesn't exist, so Terms and
+Conditions edits currently never trigger re-indexing. Stale pre-rebrand webhooks (`po-*`,
+`scorecard-on-update`) are also still present — harmless (ignored by
+`SUPPORTED_DOCTYPES`) but not yet cleaned up.
+
+Streamlit UI is tested separately via `streamlit.testing.v1.AppTest` (in-process, no browser) — `tests/test_streamlit.py`, implemented and passing. See `docs/IMPLEMENTATION_PLAN.md` Step 17 for the full test breakdown and how to run the Playwright suite for the first time.

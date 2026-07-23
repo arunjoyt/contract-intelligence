@@ -345,25 +345,51 @@ locally with mkcert certs.
 
 ## Step 17 — `tests/e2e/` — ERPNext Desk E2E Test Suite (Playwright)
 
+**Status: scaffolded, not yet executed against a live browser.** All files below exist and
+pass `ruff` + `pytest --collect-only`; `test_webhook_config.py` (REST-only, no browser) has
+been run for real. The Playwright-driven files (`test_erpnext_desk_*.py`) were written against
+Frappe's documented, version-stable Desk UI conventions but deliberately **not** exercised live
+yet — doing so requires `playwright install chromium` (~300MB) and will create/submit/cancel a
+real test Contract against whatever ERPNext site `ERPNEXT_URL` points to. Run once before relying
+on them and adjust any selector that doesn't match your Frappe version.
+
 End-to-end tests that drive the **ERPNext Desk UI via a real Chromium browser** to catch webhook-triggering bugs that REST-API integration tests miss. Not part of CI (requires live infrastructure); gated by `RUN_E2E=1`.
 
 **Why this layer is needed — three bugs found only via Desk UI, not by `test_integration.py`:**
 1. Webhooks not configured in ERPNext at all.
 2. Webhooks configured but not firing (bad URL, disabled, background queue not running).
-3. `on_update_after_submit` not triggering a webhook after a desk save on a submitted PO.
+3. `on_update_after_submit` not triggering a webhook after a desk save on a submitted, already-signed Contract.
 
 `test_integration.py` calls `frappe.client.submit` / `frappe.client.save` via REST, which bypasses the Frappe background worker queue that fires webhooks in production. Playwright drives the actual Desk UI through the same path a real user takes.
 
-**Dependency:** `pytest-playwright`. One-time setup: `playwright install chromium`.
+**Scope note (post-rebrand):** the original version of this plan referenced Purchase Order, from
+before the project narrowed to Contract Intelligence. The scaffold targets the doctypes actually
+in `ingestion.webhook_handler.SUPPORTED_DOCTYPES` today — **Contract** (submittable; `on_submit`,
+`on_update`, `on_cancel`) and **Terms and Conditions** (not submittable; `on_update` only).
+Contract's `status` field is `allow_on_submit`, so the update-after-submit test changes `status`
+via the Desk UI on an already-submitted Contract rather than PO's `on_update_after_submit` path
+(a Frappe 15 platform gap already documented in `docs/DEPLOYMENT.md` § Future Enhancements as
+verified against PO only, not Contract).
 
-**New files:**
+**Dependency:** `pytest-playwright` (added to `requirements.txt`). One-time setup: `playwright install chromium`.
+
+**Discovered while scaffolding `test_webhook_config.py`:** running it live against this dev
+ERPNext site found that the `terms-on-update` webhook record (required per
+`docs/DEPLOYMENT.md`'s table) does not exist — Terms and Conditions updates are not currently
+triggering re-indexing at all. Three stale webhook records from the pre-rebrand scope
+(`po-on-submit`, `po-on-cancel`, `po-on-update-submitted`, `scorecard-on-update`) also still
+exist; harmless (`SUPPORTED_DOCTYPES` ignores them) but worth cleaning up. Not fixed as part of
+this scaffolding work — flagged for a follow-up.
+
+**Files:**
 ```
 tests/e2e/
-├── conftest.py                               # Chromium fixture, ERPNext Desk login, Qdrant session scope
-├── test_webhook_config.py                    # REST assertions: records exist, enabled, correct events/URL/secret
-├── test_erpnext_desk_submit.py               # Desk submit PO/Contract → poll Qdrant → assert indexed
-├── test_erpnext_desk_update_after_submit.py  # Desk save on submitted PO → poll Qdrant → assert updated
-└── test_erpnext_desk_cancel.py               # Desk cancel → poll Qdrant → assert point removed
+├── __init__.py
+├── conftest.py                               # Playwright fixtures, ERPNext Desk login, REST setup/poll helpers
+├── test_webhook_config.py                    # REST assertions: records exist, enabled, correct doctype/event/URL (5 tests, verified live)
+├── test_erpnext_desk_submit.py               # Desk submit Contract (+ PDF attachment) → poll Qdrant → assert indexed (2 tests)
+├── test_erpnext_desk_update_after_submit.py  # Desk status change + resave on submitted Contract → poll Qdrant (2 tests)
+└── test_erpnext_desk_cancel.py               # Desk cancel → poll Qdrant → assert status=Cancelled (webhook_handler re-indexes, doesn't delete) (1 test)
 ```
 
 **Test coverage:**
@@ -372,10 +398,10 @@ tests/e2e/
 |---|---|---|
 | `test_webhook_config.py` | 5 (REST, no browser) | Missing / misconfigured webhook records |
 | `test_erpnext_desk_submit.py` | 2 | Webhook not firing on Desk submit |
-| `test_erpnext_desk_update_after_submit.py` | 2 | `on_update_after_submit` not firing on desk save |
-| `test_erpnext_desk_cancel.py` | 1 | Cancel not propagating to Qdrant removal |
+| `test_erpnext_desk_update_after_submit.py` | 2 | `on_update` not firing on a post-submit Desk save |
+| `test_erpnext_desk_cancel.py` | 1 | Cancel not propagating to Qdrant (re-index with status=Cancelled) |
 
-**Streamlit UI** is tested separately via `streamlit.testing.v1.AppTest` (in-process, no browser, no running server). Add `tests/test_streamlit.py` with 3 cases: basic query renders, sidebar filter wires correct param to API, graceful empty-response handling.
+**Streamlit UI** is tested separately via `streamlit.testing.v1.AppTest` (in-process, no browser, no running server) — `tests/test_streamlit.py`, 3 cases: basic query renders, sidebar supplier filter wires correct param to API, connection error shows a message without crashing. Implemented and passing.
 
 **Run:**
 ```bash
