@@ -13,6 +13,7 @@
 | F2 | High | Hardcoded credential | `docker-compose.yml` — `NEXTAUTH_SECRET`, `SALT` | Resolved |
 | F3 | Medium | Hardcoded credential | `docker-compose.yml` — `LANGFUSE_INIT_USER_PASSWORD` | Resolved |
 | F4 | High | Path traversal / SSRF | `ingestion/webhook_handler.py`, `ingestion/erpnext_client.py` | False positive |
+| F5 | Low | Hardcoded credential | `docker-compose.yml` — `POSTGRES_USER`, `POSTGRES_PASSWORD` | Resolved |
 
 ### F1 — Webhook authentication bypass via unconfigured secret
 
@@ -29,6 +30,14 @@ When `WEBHOOK_SECRET` was not set, the HMAC was computed with an empty key, allo
 ### F4 — Path traversal via `docname` in webhook payload *(false positive)*
 
 `docname` is passed unsanitised to the ERPNext API URL. Ruled not exploitable: the HMAC check (F1) blocks unauthenticated access before any payload field is read, and the attacker controls only the URL path — not the host — so this does not meet the SSRF threshold.
+
+### F5 — Hardcoded Postgres credentials (follow-up to F2/F3)
+
+`POSTGRES_USER`/`POSTGRES_PASSWORD` (`langfuse`/`langfuse`) were missed by the F2/F3 pass — same
+class of issue, same file. Externalized to `${POSTGRES_USER}`/`${POSTGRES_PASSWORD}` (issue #65),
+consistent with how `LANGFUSE_SALT`/`LANGFUSE_NEXTAUTH_SECRET` are handled. Low severity: Postgres
+has no host port mapping in the base topology (only reachable via the opt-in, loopback-bound
+`docker-compose.frontend.yml` override).
 
 ---
 
