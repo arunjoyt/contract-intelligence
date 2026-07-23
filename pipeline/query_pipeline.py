@@ -124,15 +124,15 @@ class QueryPipeline:
 
             context = _build_context(top_chunks)
             if trace:
-                gen_span = trace.span(name="generate")
+                gen_span = trace.generation(name="generate", model=OPENAI_MODEL)
                 try:
-                    answer = self._generate(question, context)
-                    gen_span.end(output=answer)
+                    answer, usage = self._generate(question, context)
+                    gen_span.end(output=answer, usage=usage)
                 except Exception:
                     gen_span.end(level="ERROR")
                     raise
             else:
-                answer = self._generate(question, context)
+                answer, _usage = self._generate(question, context)
 
             sources = _parse_sources(answer, top_chunks)
 
@@ -145,7 +145,7 @@ class QueryPipeline:
                 trace.update(level="ERROR")
             raise
 
-    def _generate(self, question: str, context: str) -> str:
+    def _generate(self, question: str, context: str) -> tuple[str, dict[str, int]]:
         response = self._client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[
@@ -155,7 +155,12 @@ class QueryPipeline:
             temperature=0.0,
             max_tokens=1024,
         )
-        return response.choices[0].message.content or ""
+        usage = {
+            "input": response.usage.prompt_tokens,
+            "output": response.usage.completion_tokens,
+            "total": response.usage.total_tokens,
+        }
+        return response.choices[0].message.content or "", usage
 
     @staticmethod
     def _span(trace: Any, name: str, fn, summarize=None):

@@ -37,13 +37,18 @@ def _make_chunk(
     }
 
 
-def _make_openai_response(content: str) -> MagicMock:
+def _make_openai_response(
+    content: str, prompt_tokens: int = 100, completion_tokens: int = 20
+) -> MagicMock:
     msg = MagicMock()
     msg.content = content
     choice = MagicMock()
     choice.message = msg
     resp = MagicMock()
     resp.choices = [choice]
+    resp.usage.prompt_tokens = prompt_tokens
+    resp.usage.completion_tokens = completion_tokens
+    resp.usage.total_tokens = prompt_tokens + completion_tokens
     return resp
 
 
@@ -320,6 +325,19 @@ def test_run_caller_filters_override_extracted(monkeypatch: pytest.MonkeyPatch) 
     assert merged.get("source_doctype") == "Terms and Conditions"
 
 
+def test_generate_returns_answer_and_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    pipeline = _make_pipeline()
+    pipeline._client.chat.completions.create.return_value = _make_openai_response(
+        "Net 30. [PO-001]", prompt_tokens=100, completion_tokens=20
+    )
+
+    answer, usage = pipeline._generate("question", "context")
+
+    assert answer == "Net 30. [PO-001]"
+    assert usage == {"input": 100, "output": 20, "total": 120}
+
+
 def test_run_without_langfuse_does_not_raise(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     pipeline = _make_pipeline(langfuse=None)
@@ -338,8 +356,47 @@ def test_run_with_langfuse_creates_trace(monkeypatch: pytest.MonkeyPatch) -> Non
     pipeline.run("question")
 
     mock_lf.trace.assert_called_once()
-    # rewrite, filter_extraction, hybrid_search, rerank, generate = 5 spans minimum
+    # rewrite, filter_extraction, hybrid_search, rerank = 4 spans; generate is a
+    # separate `generation`-type observation (see test_run_with_langfuse_generation_*)
     assert mock_trace.span.call_count >= 4
+
+
+def test_run_with_langfuse_generation_uses_generation_not_span(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The `generate` step must be a Langfuse `generation`, not a plain `span` --
+    only `generation`-type observations get auto-populated token usage/cost."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    mock_lf = MagicMock()
+    mock_trace = MagicMock()
+    mock_lf.trace.return_value = mock_trace
+    mock_trace.span.return_value = MagicMock()
+    mock_trace.generation.return_value = MagicMock()
+
+    pipeline = _make_pipeline(langfuse=mock_lf)
+    pipeline.run("question")
+
+    mock_trace.generation.assert_called_once_with(name="generate", model="gpt-4o")
+
+
+def test_run_with_langfuse_generation_passes_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    mock_lf = MagicMock()
+    mock_trace = MagicMock()
+    mock_lf.trace.return_value = mock_trace
+    mock_trace.span.return_value = MagicMock()
+    mock_gen_span = MagicMock()
+    mock_trace.generation.return_value = mock_gen_span
+
+    pipeline = _make_pipeline(langfuse=mock_lf)
+    pipeline._client.chat.completions.create.return_value = _make_openai_response(
+        "Net 30. [PO-001]", prompt_tokens=150, completion_tokens=30
+    )
+
+    pipeline.run("question")
+
+    kwargs = mock_gen_span.end.call_args[1]
+    assert kwargs["usage"] == {"input": 150, "output": 30, "total": 180}
 
 
 def test_run_with_langfuse_updates_trace_output(monkeypatch: pytest.MonkeyPatch) -> None:
