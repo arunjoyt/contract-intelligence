@@ -593,7 +593,12 @@ cp .env.example .env
 Fill in `.env` per the production checklist in the README — generate secrets with `openssl rand -hex 32`:
 `WEBHOOK_SECRET`, `ADMIN_SECRET`, `JWT_SECRET`, `LANGFUSE_NEXTAUTH_SECRET`, `LANGFUSE_SALT`,
 `LANGFUSE_ADMIN_PASSWORD`, and `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` (any string — they self-seed on
-first Langfuse boot). Plus:
+first Langfuse boot). Also generate `POSTGRES_USER`/`POSTGRES_PASSWORD` (`openssl rand -hex 16`) for a
+**fresh** deploy — but if you're redeploying onto a box with an existing `pg_data` volume, these two
+must instead match whatever the volume was originally initialized with; Postgres only applies
+`POSTGRES_USER`/`POSTGRES_PASSWORD` on first init of an empty data directory, so changing the value
+without recreating the volume breaks the `langfuse` service's DB connection rather than rotating the
+credential. Plus:
 
 ```bash
 ERPNEXT_URL=https://<your-existing-erpnext-host>
