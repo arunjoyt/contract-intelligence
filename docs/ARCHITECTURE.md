@@ -306,28 +306,24 @@ Nine groups that hit real services. Gated by `RUN_INTEGRATION=1`. Covers the ful
 
 ERPNext is driven via **REST API** (`frappe.client.submit`, `frappe.client.save`) — this does not exercise the Frappe background worker queue that fires webhooks in the real Desk path.
 
-### Layer 3 — E2E Desk UI tests (`tests/e2e/`, Playwright) — scaffolded, not yet executed against a live browser
+### Layer 3 — E2E Desk UI tests (`tests/e2e/`, Playwright) — implemented, run live
 
-Playwright drives the **ERPNext Desk UI in a real Chromium browser**, exercising the same code path a user takes. This layer exists to catch a class of bugs that REST-API integration tests cannot:
+Playwright drives the **ERPNext Desk UI in a real Chromium browser**, exercising the same code path a user takes. This layer exists to catch a class of bugs that REST-API integration tests cannot — and a live `RUN_E2E=1` run against this project's dev ERPNext site (2026-07-23) found two real, previously-unknown gaps purely by actually running it:
 
-**Three bugs found only via Desk UI:**
-1. Webhook records not configured in ERPNext.
+**Bugs found only via Desk UI:**
+1. Webhook record not configured in ERPNext — `terms-on-update` is missing (confirmed live, unfixed).
 2. Webhooks configured but not firing (URL wrong, disabled, worker queue not running).
-3. `on_update` not firing on a Desk save to an already-submitted Contract (Contract's `status` field is `allow_on_submit`, so this is a legal edit).
+3. `on_update` not firing on a Desk save to an already-submitted Contract — confirmed live via Frappe's own Webhook Request Log (zero delivery attempts, not a failed one). Contract's `is_signed` field is `allow_on_submit`, so toggling it via the Desk UI is a legal edit that should, but doesn't, re-index.
 
-Test files and what each catches (gated by `RUN_E2E=1`):
+Test files, what each catches, and the live result (gated by `RUN_E2E=1`):
 
-| File | Browser? | Catches | Status |
+| File | Browser? | Catches | Live result |
 |---|---|---|---|
-| `test_webhook_config.py` | No (REST) | Missing / misconfigured webhook records | Implemented, run live |
-| `test_erpnext_desk_submit.py` | Yes | Webhook not firing on Desk submit | Scaffolded, not yet run live |
-| `test_erpnext_desk_update_after_submit.py` | Yes | Post-submit Desk save not re-indexing | Scaffolded, not yet run live |
-| `test_erpnext_desk_cancel.py` | Yes | Cancel not propagating to Qdrant (status=Cancelled) | Scaffolded, not yet run live |
+| `test_webhook_config.py` | No (REST) | Missing / misconfigured webhook records | 4 passed, 1 failed (real gap, see above) |
+| `test_erpnext_desk_submit.py` | Yes | Webhook not firing on Desk submit | 2 passed |
+| `test_erpnext_desk_update_after_submit.py` | Yes | Post-submit Desk save not re-indexing | 1 xfailed (confirmed platform gap), 1 passed |
+| `test_erpnext_desk_cancel.py` | Yes | Cancel not propagating to Qdrant (status=Cancelled) | 1 passed |
 
-Running `test_webhook_config.py` against this project's dev ERPNext site found a real gap: the
-`terms-on-update` webhook required by `docs/DEPLOYMENT.md`'s table doesn't exist, so Terms and
-Conditions edits currently never trigger re-indexing. Stale pre-rebrand webhooks (`po-*`,
-`scorecard-on-update`) are also still present — harmless (ignored by
-`SUPPORTED_DOCTYPES`) but not yet cleaned up.
+The `test_all_required_webhooks_exist` failure is left failing intentionally — it's a real, actionable, unfixed config gap (Terms and Conditions edits currently trigger no re-indexing at all), not a test bug. Three stale pre-rebrand webhooks (`po-*`, `scorecard-on-update`) are also still present on this site; harmless (ignored by `SUPPORTED_DOCTYPES`) but not yet cleaned up. The post-submit-edit gap is `xfail(strict=True)`, documenting it as a known Frappe 15 platform limitation (see `docs/DEPLOYMENT.md` § Future Enhancements) rather than leaving it as an unexplained red test — `strict=True` means a future Frappe fix would flip it to a loud XPASS failure instead of silently staying green.
 
-Streamlit UI is tested separately via `streamlit.testing.v1.AppTest` (in-process, no browser) — `tests/test_streamlit.py`, implemented and passing. See `docs/IMPLEMENTATION_PLAN.md` Step 17 for the full test breakdown and how to run the Playwright suite for the first time.
+Streamlit UI is tested separately via `streamlit.testing.v1.AppTest` (in-process, no browser) — `tests/test_streamlit.py`, implemented and passing. See `docs/IMPLEMENTATION_PLAN.md` Step 17 for the full test breakdown.

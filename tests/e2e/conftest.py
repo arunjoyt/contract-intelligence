@@ -28,6 +28,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -245,7 +246,10 @@ def desk_login_state(browser, app_reachable):
     page.fill("#login_email", username)
     page.fill("#login_password", password)
     page.click(".btn-login")
-    page.wait_for_url(f"{ERPNEXT_URL}/app*", timeout=15000)
+    # Playwright glob patterns don't match `/` with a bare `*` (only `**` does),
+    # so f"{ERPNEXT_URL}/app*" never matches ERPNext's actual post-login
+    # redirect to /app/home -- use a regex instead. Found by running this live.
+    page.wait_for_url(re.compile(rf"{re.escape(ERPNEXT_URL)}/app(/.*)?$"), timeout=15000)
     state = context.storage_state()
     context.close()
     return state
@@ -270,5 +274,33 @@ def click_primary_action(page, label: str) -> None:
 
 def wait_for_indicator(page, text: str, timeout: int = 15000) -> None:
     """Wait for the Desk form's status indicator pill to show `text`
-    (e.g. "Submitted", "Cancelled")."""
+    (e.g. "Cancelled"). NOTE: found via a live run that Contract shows its own
+    business-status indicator ("Unsigned"/"Active") after Submit rather than a
+    generic "Submitted" label -- use `wait_for_docstatus_submitted` for that
+    case instead of this helper."""
     page.locator(".indicator-pill", has_text=text).first.wait_for(timeout=timeout)
+
+
+def wait_for_docstatus_submitted(page, timeout: int = 15000) -> None:
+    """Wait for a Desk form to reflect docstatus=1 after Submit. Contract's
+    indicator pill shows its own computed business status (e.g. "Unsigned"),
+    not a generic "Submitted" label, so the reliable signal is the Cancel
+    primary action appearing -- Frappe only shows Cancel on a submitted,
+    not-yet-cancelled document. Found via a live run against this doctype."""
+    page.get_by_role("button", name="Cancel", exact=True).wait_for(timeout=timeout)
+
+
+def set_is_signed_and_update(page, checked: bool) -> None:
+    """Toggle Contract's `is_signed` checkbox (an allow_on_submit field) and
+    save via the "Update" primary action -- the label Frappe uses for saving
+    edits to an already-submitted document, distinct from "Save" (drafts only).
+    The field wrapper contains a second, disabled, display-only checkbox input
+    (hidden but present in the DOM), so the locator must scope to `.input-area`
+    to avoid a strict-mode ambiguous-match error. Found via a live run.
+    """
+    checkbox = page.locator('[data-fieldname="is_signed"] .input-area input[type="checkbox"]')
+    if checked:
+        checkbox.check()
+    else:
+        checkbox.uncheck()
+    page.get_by_role("button", name="Update", exact=True).click()

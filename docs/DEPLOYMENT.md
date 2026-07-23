@@ -374,11 +374,11 @@ The webhook handler (`ingestion/webhook_handler.py`) is event-agnostic: for any 
 - **PO amended** → amendment creates a new PO (new `docname`) → `on_submit` fires again on the amendment
 - **PO cancelled** → `on_cancel` fires → re-indexed with status=Cancelled
 - **Invoice submitted/cancelled** → indexed/re-indexed the same way as POs (no attachment handling)
-- **Contract updated** → `on_update` fires → re-indexed with latest content, including any attached PDFs
+- **Contract updated** → `on_update` fires → re-indexed with latest content, including any attached PDFs (true for a **draft** Contract; see the known gap below for edits made *after* submit)
 - **Terms and Conditions updated** → `on_update` fires → re-indexed
 - **Scorecard updated** → `on_update` fires → re-indexed
 
-> **Known gap:** edits to a submitted PO (e.g. changing delivery date or remarks) do not trigger re-indexing. Frappe 15 does not reliably fire `on_update_after_submit` via API or desk saves. The Qdrant vector for a live PO will reflect the state at submission time until the next `on_cancel` or a manual full re-index (`POST /ingest/full`). See [Future Enhancements](#future-enhancements).
+> **Known gap:** edits to an already-submitted PO or Contract (e.g. changing a PO's delivery date, or toggling Contract's `is_signed`) do not trigger re-indexing. Frappe 15 does not reliably fire a webhook for a Desk save on a submitted document — confirmed for PO's `on_update_after_submit` and, via a live `RUN_E2E=1` run of `tests/e2e/test_erpnext_desk_update_after_submit.py`, for Contract's plain `on_update` too (zero webhook delivery attempts recorded in Frappe's own Webhook Request Log for that action — not a failed delivery, one that never fires). The Qdrant vector will reflect the state at submission time until the next `on_cancel`/re-submission or a manual full re-index (`POST /ingest/full`). See [Future Enhancements](#future-enhancements).
 
 ---
 
@@ -797,20 +797,24 @@ enhancement below.
 
 ## Future Enhancements
 
-### PO re-indexing on post-submit edits (`on_update_after_submit`)
+### Post-submit edits aren't re-indexed (PO's `on_update_after_submit`, Contract's `on_update`)
 
-**Status:** Not implemented — blocked by Frappe 15 platform limitation.
+**Status:** Not implemented — blocked by Frappe 15 platform limitation. **Confirmed on Contract too**
+(2026-07-23, `tests/e2e/test_erpnext_desk_update_after_submit.py`, `RUN_E2E=1` live run) — this was
+previously only verified against Purchase Order, before PO was removed from scope.
 
-**Problem:** When a buyer edits a field on an already-submitted Purchase Order (e.g. adjusting the delivery date or adding remarks), the Qdrant vector is not updated. The indexed document reflects the state at submission time.
+**Problem:** When a buyer edits a field on an already-submitted Purchase Order (e.g. adjusting the delivery date or adding remarks), the Qdrant vector is not updated. The indexed document reflects the state at submission time. The same is true for Contract: toggling `is_signed` via the Desk UI on a submitted Contract (a legal `allow_on_submit` edit — ERPNext's own controller correctly flips `status` from "Unsigned" to "Active" as a result) never reaches Qdrant.
 
-**Root cause:** Frappe 15 does not reliably fire the `on_update_after_submit` webhook event. Tested approaches that all failed to enqueue the webhook:
+**Root cause:** Frappe 15 does not reliably fire a webhook for a Desk save on an already-submitted document. For PO, tested approaches that all failed to enqueue the `on_update_after_submit` webhook:
 - `frappe.client.save` via REST API
 - `frappe.desk.form.save.savedocs` via REST API
 - Save from the ERPNext desk UI
 
-**Workaround:** Run a full re-index (`POST /ingest/full`) after bulk PO edits, or wait for the next `on_cancel`/re-submission event.
+For Contract, the registered webhook is plain `on_update` (not `on_update_after_submit`) — and even that doesn't fire. `tests/e2e/test_erpnext_desk_update_after_submit.py` confirmed this conclusively by checking Frappe's own **Webhook Request Log** doctype: zero delivery attempts were recorded for the Desk "Update" action window — not a failed delivery, one that was never attempted. The corresponding test is marked `xfail(strict=True)` in the suite, documenting this as a known limitation rather than a bug in the test.
 
-**When to revisit:** If a future Frappe release resolves this, add the `po-on-update-submitted` webhook back (it is already handled by the event-agnostic webhook handler) and reinstate the E2E integration test in `tests/test_integration.py`.
+**Workaround:** Run a full re-index (`POST /ingest/full`) after bulk PO/Contract edits, or wait for the next `on_cancel`/re-submission event.
+
+**When to revisit:** If a future Frappe release resolves this, add the `po-on-update-submitted` webhook back (it is already handled by the event-agnostic webhook handler), remove the `xfail` marker from `tests/e2e/test_erpnext_desk_update_after_submit.py` (it's `strict=True`, so an unexpected pass will already surface loudly as a failure), and reinstate the E2E integration test in `tests/test_integration.py` for PO if that doctype comes back into scope.
 
 ### Mesh VPN (Tailscale) for team-wide Langfuse/Qdrant access
 

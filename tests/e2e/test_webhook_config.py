@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from dotenv import load_dotenv
@@ -51,7 +52,16 @@ def webhooks() -> dict[str, dict]:
             )
         return {r["name"]: r for r in records}
 
-    return asyncio.run(_fetch())
+    # Playwright's sync API (used by the Desk-UI test files collected alongside
+    # this one) keeps its own event loop registered on the main thread once its
+    # `browser` fixture has been instantiated -- calling asyncio.run() directly
+    # here then raises "asyncio.run() cannot be called from a running event
+    # loop", even though this fixture has nothing to do with Playwright. Found
+    # by running the full tests/e2e/ suite together, not this file alone.
+    # Running it in a fresh thread sidesteps whatever loop state the main
+    # thread has.
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(asyncio.run, _fetch()).result()
 
 
 @live

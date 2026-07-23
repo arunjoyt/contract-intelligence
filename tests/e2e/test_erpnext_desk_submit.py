@@ -16,7 +16,7 @@ from tests.e2e.conftest import (
     create_draft_contract,
     live,
     poll_qdrant,
-    wait_for_indicator,
+    wait_for_docstatus_submitted,
 )
 
 
@@ -26,7 +26,7 @@ def test_contract_desk_submit_fires_webhook_and_indexes(desk_page) -> None:
     try:
         desk_page.goto(f"{ERPNEXT_URL}/app/contract/{docname}")
         click_primary_action(desk_page, "Submit")
-        wait_for_indicator(desk_page, "Submitted")
+        wait_for_docstatus_submitted(desk_page)
 
         points = poll_qdrant(docname, predicate=lambda pts: len(pts) > 0)
         assert points, f"No Qdrant points found for {docname} after Desk submit"
@@ -47,7 +47,7 @@ def test_contract_desk_submit_with_pdf_attachment_indexes_extra_chunks(desk_page
 
         desk_page.goto(f"{ERPNEXT_URL}/app/contract/{docname}")
         click_primary_action(desk_page, "Submit")
-        wait_for_indicator(desk_page, "Submitted")
+        wait_for_docstatus_submitted(desk_page)
 
         points = poll_qdrant(docname, predicate=lambda pts: len(pts) >= 2)
         assert len(points) >= 2, (
