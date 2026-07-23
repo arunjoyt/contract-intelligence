@@ -10,6 +10,7 @@ import json
 import os
 from types import TracebackType
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -24,6 +25,19 @@ class ERPNextAuthError(ERPNextError):
 
 class ERPNextNotFoundError(ERPNextError):
     """Raised when a requested document or resource does not exist (404)."""
+
+
+class ERPNextInvalidFileURLError(ERPNextError):
+    """Raised when a `File` record's `file_url` is not a relative site path.
+
+    ERPNext's `File` doctype supports "attach by URL", so a low-privileged
+    user (e.g. a `Purchase User` attaching a file to a Purchase Order or
+    Contract) can set `file_url` to an arbitrary absolute URL. Since the
+    underlying httpx client carries a default `Authorization` header with the
+    service account's ERPNext API key/secret, honoring an absolute
+    `file_url` verbatim would leak those credentials to an attacker-controlled
+    host (and enables SSRF against internal-only services). See issue #63.
+    """
 
 
 class ERPNextClient:
@@ -107,9 +121,15 @@ class ERPNextClient:
     async def get_file_content(self, file_url: str) -> bytes:
         """Download raw bytes for a Frappe `File` record's `file_url`.
 
-        `file_url` is typically a path relative to the site (e.g. `/private/files/x.pdf`);
-        it is resolved against the client's base URL.
+        `file_url` must be a path relative to the site (e.g. `/private/files/x.pdf`),
+        resolved against the client's base URL. Rejects any `file_url` carrying its
+        own scheme or host -- see `ERPNextInvalidFileURLError`.
         """
+        parsed = urlparse(file_url)
+        if parsed.scheme or parsed.netloc:
+            raise ERPNextInvalidFileURLError(
+                f"file_url must be a relative path, got {file_url!r}"
+            )
         response = await self._client.get(file_url)
         self._raise_for_status(response)
         return response.content

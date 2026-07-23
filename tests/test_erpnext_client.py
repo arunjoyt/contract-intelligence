@@ -7,6 +7,7 @@ import respx
 from ingestion.erpnext_client import (
     ERPNextAuthError,
     ERPNextClient,
+    ERPNextInvalidFileURLError,
     ERPNextNotFoundError,
 )
 
@@ -58,6 +59,24 @@ async def test_get_file_content_returns_bytes(client: ERPNextClient) -> None:
     result = await client.get_file_content("/private/files/contract.pdf")
 
     assert result == b"%PDF-1.4 fake content"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_file_content_rejects_absolute_url(client: ERPNextClient) -> None:
+    """SSRF/credential-leak guard: an absolute file_url must be rejected before
+    any request is issued, since the client attaches a default Authorization
+    header that would otherwise be sent to the attacker-controlled host."""
+    with pytest.raises(ERPNextInvalidFileURLError):
+        await client.get_file_content("https://attacker.example.com/collect")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_file_content_rejects_protocol_relative_url(client: ERPNextClient) -> None:
+    """A scheme-less `//host/path` URL still carries a netloc and must be rejected."""
+    with pytest.raises(ERPNextInvalidFileURLError):
+        await client.get_file_content("//attacker.example.com/collect")
 
 
 @pytest.mark.asyncio
