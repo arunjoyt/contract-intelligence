@@ -313,6 +313,7 @@ def evaluate(dataset_path: Path, output_path: Path) -> None:
     output = {
         "timestamp": datetime.now(UTC).isoformat(),
         "dataset": str(dataset_path),
+        "query_rewrite_strategy": rewriter._strategy,
         "num_questions": len(samples),
         "metrics": metrics,
         "per_question": per_question,

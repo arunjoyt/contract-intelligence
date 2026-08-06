@@ -1,11 +1,13 @@
 """Query rewriting for the retrieval pipeline.
 
-Two strategies, controlled by the QUERY_REWRITE_STRATEGY env var:
+Three strategies, controlled by the QUERY_REWRITE_STRATEGY env var:
 - 'hyde' (default): Prompt GPT-4o to write a hypothetical contract
   document that would answer the question, then embed that document.
   Improves recall by searching in answer-space rather than query-space.
 - 'step_back': Prompt GPT-4o to rewrite the question at a higher
   abstraction level, then embed the rewritten question.
+- 'none': No LLM call -- embed the original query as-is. Baseline for
+  measuring whether rewriting is actually earning its latency/cost.
 """
 
 from __future__ import annotations
@@ -49,6 +51,9 @@ class QueryRewriter:
         The embedding is of the rewritten text; callers use it for vector search.
         Falls back to the original query if GPT-4o returns an empty response.
         """
+        if self._strategy == "none":
+            return query, self._embedder.embed_query(query)
+
         rewritten = self._step_back(query) if self._strategy == "step_back" else self._hyde(query)
 
         vector = self._embedder.embed_query(rewritten)

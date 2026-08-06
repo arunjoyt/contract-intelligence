@@ -40,6 +40,7 @@ Thumbs.db
 *.bin
 *.pt
 evaluation/results.json
+evaluation/results_*.json
 
 # Integration test results (scripts/run_integration.sh)
 test-results/
