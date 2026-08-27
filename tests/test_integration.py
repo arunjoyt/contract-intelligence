@@ -1174,14 +1174,53 @@ def test_readme_active_contracts_question_is_grounded_not_refused(api_http) -> N
 # ===========================================================================
 
 
+def _seed_eval_collection(vs, embedder, dataset_path) -> None:
+    """Populate the test collection with the dataset's ground-truth contexts.
+
+    evaluate.py runs against whatever is already in Qdrant — it no longer
+    self-seeds. For the integration suite we stand in for the real indexed
+    corpus with the dataset's own ground-truth chunks so the script has
+    something to retrieve.
+    """
+    import json
+    import re
+
+    entries = json.loads(dataset_path.read_text())
+    docname_re = re.compile(r"\b([A-Z]{2,10}-\d{3,}(?:-\d{3,})?)\b")
+
+    seen: set[str] = set()
+    texts: list[str] = []
+    for entry in entries:
+        for text in entry.get("ground_truth_contexts", []):
+            if text not in seen:
+                seen.add(text)
+                texts.append(text)
+    if not texts:
+        return
+
+    vectors = embedder.embed_texts(texts)
+    counts: dict[str, int] = {}
+    chunks: list[dict] = []
+    for text, vector in zip(texts, vectors, strict=True):
+        match = docname_re.search(text)
+        docname = match.group(1) if match else "eval-doc"
+        idx = counts.get(docname, 0)
+        counts[docname] = idx + 1
+        chunks.append(
+            {"vector": vector, "docname": docname, "chunk_index": idx, "text": text}
+        )
+    for chunk in chunks:
+        chunk["total_chunks"] = counts[chunk["docname"]]
+    vs.upsert_chunks(chunks)
+
+
 @pytest.fixture(scope="session")
-def eval_results(tmp_path_factory, vs):
+def eval_results(tmp_path_factory, vs, embedder):
     """Run evaluate.py once per session and return the output path.
 
-    Depends on ``vs`` only to guarantee the test Qdrant collection exists.
-    No manual seeding is needed: evaluate.py falls back to ground-truth
-    contexts when the collection is empty, so the script still produces a
-    valid results.json in all cases.
+    evaluate.py runs against whatever is already in the Qdrant collection, so
+    the fixture seeds the test collection with the dataset's ground-truth
+    contexts first (see ``_seed_eval_collection``).
     """
     from pathlib import Path
 
@@ -1189,6 +1228,8 @@ def eval_results(tmp_path_factory, vs):
 
     dataset_path = Path("evaluation/test_dataset.json")
     output_path = tmp_path_factory.mktemp("eval") / "results.json"
+
+    _seed_eval_collection(vs, embedder, dataset_path)
 
     original = os.environ.get("QDRANT_COLLECTION")
     os.environ["QDRANT_COLLECTION"] = TEST_COLLECTION

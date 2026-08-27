@@ -215,7 +215,11 @@ Allowed roles in both options: `Purchase Manager`, `Purchase User`, `Accounts Us
 ## CI
 
 GitHub Actions (`.github/workflows/ci.yml`): `ruff check .` and `pytest tests/` on every
-push (tests run with no network — OpenAI and Qdrant are mocked). RAGAS evaluation is a separate
-workflow (`.github/workflows/evaluate.yml`, on merge to `main`, `evaluation/results.json` uploaded as
-an artifact) that is currently **disabled on GitHub** pending #49 — scores aren't thresholded yet, so
-runs would only spend OpenAI quota.
+push (tests run with no network — OpenAI and Qdrant are mocked). That's the whole CI surface.
+
+RAGAS evaluation is **not** in CI — it's a manual local run (`python evaluation/evaluate.py`)
+against a populated Qdrant collection. `evaluation/results.baseline.json` is the committed
+reference; refresh it deliberately (and in the same PR) when a pipeline change is meant to move
+the numbers. See `docs/ARCHITECTURE.md` § Evaluation. A judge-based score on ~17 headline
+questions is too noisy to gate on; revisit an automated gate only once the dataset is
+substantially larger.
