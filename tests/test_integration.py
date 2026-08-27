@@ -498,12 +498,12 @@ async def test_query_pipeline_returns_answer_with_citations(embedder, vs) -> Non
 @live
 @pytest.mark.pipeline
 async def test_query_pipeline_respects_supplier_filter(embedder, vs) -> None:
-    """Explicit supplier filter reaches Qdrant and surfaces target-supplier documents.
+    """Explicit supplier filter is a hard constraint on the fused result (#98).
 
-    The filter applies to the vector-search side of HybridSearch; BM25 is
-    intentionally unfiltered (it has no metadata support).  So the guarantee
-    is that at least one source from the target supplier appears in the results
-    — not that *all* sources are from that supplier.
+    Both legs of HybridSearch honour the filter now — Qdrant during ANN
+    traversal, the BM25 leg via `_passes_filter` before RRF — so every chunk in
+    the candidate pool, and therefore every cited source, is from the target
+    supplier.
     """
     from ingestion.erpnext_client import ERPNextClient
 
@@ -528,12 +528,13 @@ async def test_query_pipeline_respects_supplier_filter(embedder, vs) -> None:
         filters={"supplier": target_supplier},
     )
 
-    # BM25 is unfiltered by design, so the result set may include docs from
-    # other suppliers.  The Qdrant filter is verified by confirming the target
-    # supplier's documents are present (i.e. the filter did not exclude them).
     supplier_names = {s.supplier for s in result["sources"]}
     assert target_supplier in supplier_names, (
         f"Expected at least one source from {target_supplier!r}; "
+        f"got suppliers: {supplier_names}"
+    )
+    assert supplier_names <= {target_supplier}, (
+        f"Filter is a hard constraint — every source must be from {target_supplier!r}; "
         f"got suppliers: {supplier_names}"
     )
 

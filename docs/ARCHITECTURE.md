@@ -49,7 +49,7 @@ the pipeline a top-5. See "Query Pipeline — Step by Step" below.
 
 1. **Query rewriting** — HyDE generates a hypothetical answer; its embedding becomes the query vector. This improves recall for abstract questions.
 2. **Metadata filter extraction** — pure keyword matching (`_extract_filters()` in `query_pipeline.py`) against doctype and status keyword lists in the original question. No LLM call and no date-range parsing — only `source_doctype` and `status` are ever set this way; date/supplier filters come solely from the frontend sidebar.
-3. **Hybrid search** — BM25 (lexical) and Qdrant vector search run in parallel. Results are fused with Reciprocal Rank Fusion (`k=60`), returning 20 candidates. **Important:** metadata filters (supplier, doctype, status) are applied only to the Qdrant vector-search path — BM25 has no metadata support and searches the full corpus. Caller filters therefore narrow vector results but do not guarantee that every result in the fused set matches the filter.
+3. **Hybrid search** — BM25 (lexical) and Qdrant vector search run in parallel. Results are fused with Reciprocal Rank Fusion (`k=60`), returning 20 candidates. Metadata filters (supplier, doctype, status) are honoured by **both** legs: Qdrant filters during ANN traversal; `rank_bm25` has no filter hook, so the ranked BM25 list is filtered in Python before fusion (`_passes_filter`, mirroring `VectorStore._build_filter`). Every chunk in the fused set therefore satisfies the filter — it's a hard constraint (#98).
 4. **Cross-encoder reranking** — `ms-marco-MiniLM` scores all 20 `(query, chunk)` pairs and returns the top 5.
 5. **Generation** — GPT-4o receives the top-5 chunks as context with a structured prompt that requires source citations.
 6. **Tracing** — each step is a Langfuse child span; the full trace is linked to the question.
@@ -220,13 +220,13 @@ This ensures updated contract terms are reflected in the next query without a fu
 
 The BM25 index is built in memory at API startup by fetching all payload texts from Qdrant. It is rebuilt after each webhook upsert to stay current. For large collections (>100k docs), consider moving to Qdrant's sparse vector support instead.
 
-### Filter behaviour — verified in live testing (2026-06-19)
+### Filter behaviour
 
-Metadata filters (supplier, doctype, status) apply **only to the Qdrant vector-search leg** of the hybrid search. BM25 is corpus-wide by design; it cannot apply field conditions. Consequences:
+Metadata filters (supplier, doctype, status) are applied to **both** legs of the hybrid search. Qdrant filters during ANN traversal; `rank_bm25` has no native filter hook, so `HybridSearch.search` walks the BM25-ranked list and drops chunks that fail `_passes_filter` (the same non-None exact-match AND used by `VectorStore._build_filter`) before RRF fusion, re-ranking the survivors densely so both legs feed RRF the same rank space.
 
-- A supplier filter narrows the Qdrant candidate set to that supplier but BM25 may still surface documents from other suppliers that score highly on lexical overlap.
-- The pipeline's `_parse_sources` only includes documents that GPT-4o explicitly cites, so uncited BM25 hits are silently discarded — the practical leakage is lower than the raw candidate count suggests.
-- If strict supplier isolation is required (e.g. a multi-tenant deployment), a post-rerank filter on `source.supplier` must be added in `query_pipeline.py` before the generation step.
+- Every chunk in the fused top-20 satisfies the filter — it is a hard constraint, not a soft rank bias (fixed in #98; before that the BM25 leg was corpus-wide and a lexical hit from a non-matching supplier could survive fusion).
+- Date and multi-select filters: `_passes_filter` treats a list/tuple/set condition as membership, but the Qdrant leg's `_build_filter` still uses scalar `MatchValue`, so a multi-select doctype filter isn't yet a true OR end-to-end. Date filters remain exact-equality on `start_date`/`end_date` (no range) on both legs — see Known Limitations.
+- `_parse_sources` only includes documents GPT-4o explicitly cites, so even before #98 uncited leakage was discarded downstream; the fix makes the candidate pool itself correct.
 
 ## Observability
 

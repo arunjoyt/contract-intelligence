@@ -1,9 +1,14 @@
 """Hybrid BM25 + vector search with Reciprocal Rank Fusion.
 
 Architecture (from docs/ARCHITECTURE.md):
-- BM25 runs over an in-memory corpus of all indexed chunk texts (no metadata
-  filtering — BM25 doesn't support it natively).
-- Qdrant vector search runs in parallel with any metadata filters applied.
+- BM25 runs over an in-memory corpus of all indexed chunk texts. rank_bm25 has
+  no native filter hook, so when ``filter_conditions`` is set the ranked BM25
+  list is filtered in Python (``_passes_filter`` — same exact-match AND
+  semantics as ``VectorStore._build_filter``) before it enters RRF. Without
+  this an unfiltered lexical hit could survive fusion and the filter would be a
+  soft rank bias rather than a hard constraint (#98).
+- Qdrant vector search runs in parallel with the same metadata filters applied
+  during ANN traversal.
 - Both ranked lists are fused via RRF: score(d) = Σ 1/(k + rank(d)), k=60.
 - The fused list is sorted descending and the top_k results are returned.
 
@@ -52,11 +57,12 @@ class HybridSearch:
         filter_conditions: dict[str, Any] | None = None,
         top_k: int = 20,
     ) -> list[dict]:
-        """Hybrid search: BM25 (full corpus) fused with Qdrant (filtered) via RRF.
+        """Hybrid search: BM25 + Qdrant vector search fused via RRF.
 
         Returns up to ``top_k`` payload dicts sorted by descending RRF score.
-        BM25 results are unfiltered by design — the Qdrant side applies
-        ``filter_conditions``.
+        When ``filter_conditions`` is given, both legs honour it — Qdrant filters
+        during ANN traversal, the BM25 leg is filtered in Python (#98) — so the
+        filter is a hard constraint on the fused result, not a soft bias.
         """
         query_vector = self._embedder.embed_query(query)
         qdrant_results = self._vector_store.search(query_vector, filter_conditions, top_k=top_k)
@@ -64,17 +70,27 @@ class HybridSearch:
         rrf_scores: dict[str, float] = {}
         payloads: dict[str, dict] = {}
 
-        # --- BM25 contribution ---
+        # --- BM25 contribution (filtered to match Qdrant's leg) ---
         if self._bm25 is not None and self._corpus_docs:
             bm25_scores = self._bm25.get_scores(_tokenize(query))
             ranked_indices = sorted(
                 range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True
             )
-            for rank, doc_idx in enumerate(ranked_indices[:top_k]):
+            # Walk the full ranked list, skipping filter misses, until top_k
+            # matching chunks are collected. Survivors are re-ranked densely
+            # (rank = position among matches) so RRF sees the same rank space
+            # Qdrant's filtered top_k uses.
+            matched = 0
+            for doc_idx in ranked_indices:
                 doc = self._corpus_docs[doc_idx]
+                if filter_conditions and not _passes_filter(doc, filter_conditions):
+                    continue
                 key = _chunk_key(doc)
-                rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (_RRF_K + rank + 1)
+                rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (_RRF_K + matched + 1)
                 payloads[key] = doc
+                matched += 1
+                if matched >= top_k:
+                    break
 
         # --- Qdrant contribution ---
         for rank, scored_point in enumerate(qdrant_results):
@@ -94,6 +110,24 @@ class HybridSearch:
 
 def _tokenize(text: str) -> list[str]:
     return text.lower().split()
+
+
+def _passes_filter(payload: dict[str, Any], conditions: dict[str, Any]) -> bool:
+    """Mirror ``VectorStore._build_filter``: every non-None condition must match,
+    ANDed together. A scalar condition is exact equality; a list/tuple/set is
+    membership (so a multi-select sidebar filter behaves sensibly if the Qdrant
+    leg ever grows ``MatchAny`` support).
+    """
+    for key, value in conditions.items():
+        if value is None:
+            continue
+        actual = payload.get(key)
+        if isinstance(value, list | tuple | set):
+            if actual not in value:
+                return False
+        elif actual != value:
+            return False
+    return True
 
 
 def _chunk_key(payload: dict) -> str:

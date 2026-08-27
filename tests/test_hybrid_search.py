@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from retrieval.hybrid_search import HybridSearch, _chunk_key, _tokenize
+from retrieval.hybrid_search import HybridSearch, _chunk_key, _passes_filter, _tokenize
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -23,6 +23,10 @@ def _make_scored_point(payload: dict) -> MagicMock:
 
 def _doc(docname: str, chunk_index: int, text: str) -> dict:
     return {"docname": docname, "chunk_index": chunk_index, "total_chunks": 1, "text": text}
+
+
+def _doc_meta(docname: str, text: str, **meta) -> dict:
+    return {"docname": docname, "chunk_index": 0, "total_chunks": 1, "text": text, **meta}
 
 
 # A three-doc corpus gives BM25 enough docs for IDF to produce non-zero scores.
@@ -250,8 +254,90 @@ def test_search_rrf_scores_decrease_with_rank(
 
 
 # ---------------------------------------------------------------------------
+# search — BM25 leg metadata filtering (#98)
+# ---------------------------------------------------------------------------
+
+
+def test_search_bm25_leg_drops_docs_failing_filter(
+    hs: HybridSearch, mock_vector_store: MagicMock
+) -> None:
+    """A high-scoring BM25 hit that fails filter_conditions must not reach the fused set."""
+    acme = _doc_meta("CON-ACME", "payment terms net 30 supplier obligations", supplier="Acme")
+    globex = _doc_meta("CON-GLOBEX", "payment terms net 30 supplier obligations", supplier="Globex")
+    hs.build_bm25_index([acme, globex])
+    mock_vector_store.search.return_value = []  # Qdrant leg contributes nothing
+
+    results = hs.search("payment terms net 30", filter_conditions={"supplier": "Acme"})
+
+    docnames = [r["docname"] for r in results]
+    assert "CON-ACME" in docnames
+    assert "CON-GLOBEX" not in docnames
+
+
+def test_search_bm25_leg_unfiltered_when_no_conditions(
+    hs: HybridSearch, mock_vector_store: MagicMock
+) -> None:
+    acme = _doc_meta("CON-ACME", "payment terms net 30", supplier="Acme")
+    globex = _doc_meta("CON-GLOBEX", "payment terms net 30", supplier="Globex")
+    hs.build_bm25_index([acme, globex])
+    mock_vector_store.search.return_value = []
+
+    results = hs.search("payment terms net 30")
+
+    assert {r["docname"] for r in results} == {"CON-ACME", "CON-GLOBEX"}
+
+
+def test_search_bm25_leg_walks_past_misses_to_fill_top_k(
+    hs: HybridSearch, mock_vector_store: MagicMock
+) -> None:
+    """Filter misses that outrank matches don't consume the top_k budget."""
+    docs = [
+        _doc_meta(f"CON-GLOBEX-{i}", "payment terms net 30 clause", supplier="Globex")
+        for i in range(3)
+    ] + [
+        _doc_meta(f"CON-ACME-{i}", "payment terms net 30", supplier="Acme") for i in range(2)
+    ]
+    hs.build_bm25_index(docs)
+    mock_vector_store.search.return_value = []
+
+    results = hs.search(
+        "payment terms net 30 clause", filter_conditions={"supplier": "Acme"}, top_k=2
+    )
+
+    assert {r["docname"] for r in results} == {"CON-ACME-0", "CON-ACME-1"}
+
+
+def test_search_bm25_leg_list_condition_is_membership(
+    hs: HybridSearch, mock_vector_store: MagicMock
+) -> None:
+    con = _doc_meta("CON-1", "payment terms", source_doctype="Contract")
+    tc = _doc_meta("TC-1", "payment terms", source_doctype="Terms and Conditions")
+    ssc = _doc_meta("SSC-1", "payment terms", source_doctype="Supplier Scorecard")
+    hs.build_bm25_index([con, tc, ssc])
+    mock_vector_store.search.return_value = []
+
+    results = hs.search(
+        "payment terms",
+        filter_conditions={"source_doctype": ["Contract", "Terms and Conditions"]},
+    )
+
+    assert {r["docname"] for r in results} == {"CON-1", "TC-1"}
+
+
+# ---------------------------------------------------------------------------
 # Pure helpers
 # ---------------------------------------------------------------------------
+
+
+def test_passes_filter_and_semantics() -> None:
+    payload = {"supplier": "Acme", "status": "Active"}
+    assert _passes_filter(payload, {"supplier": "Acme"})
+    assert _passes_filter(payload, {"supplier": "Acme", "status": "Active"})
+    assert _passes_filter(payload, {"supplier": None})  # None conditions ignored
+    assert _passes_filter(payload, {"supplier": ["Acme", "Beta"]})  # membership
+    assert not _passes_filter(payload, {"supplier": "Globex"})
+    assert not _passes_filter(payload, {"supplier": "Acme", "status": "Cancelled"})
+    assert not _passes_filter(payload, {"missing_key": "x"})
 
 
 def test_tokenize_lowercases_and_splits() -> None:
