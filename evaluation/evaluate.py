@@ -58,6 +58,8 @@ Context:
 """
 
 # Mirrors pipeline/query_pipeline.py's _CONTEXT_META_FIELDS -- keep in sync.
+# (This duplication, and top_k/top_n/_ANSWER_SYSTEM below, is tracked for removal
+# in #110 -- evaluate.py should import these from the pipeline, not re-declare them.)
 _CONTEXT_META_FIELDS = (
     "source_doctype",
     "supplier",
@@ -66,6 +68,8 @@ _CONTEXT_META_FIELDS = (
     "company",
     "start_date",
     "end_date",
+    "linked_doctype",
+    "linked_docname",
 )
 
 
