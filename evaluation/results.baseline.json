@@ -1,8 +1,23 @@
 {
-  "note": "Frozen reference run from #102 (22-question dataset, gpt-4o generation). RAGAS metrics are LLM-judged and drift +/-0.03-0.05 run-to-run; this is a point-in-time snapshot for #49 threshold calibration, not a spec. Headline covers the 15 non-expected_fail questions; metrics_by_case_class breaks it down; expected_fail_metrics holds the aggregation + temporal cases (known limitations, scored separately). Regenerate deliberately (copy a clean evaluation/results.json here) only when the pipeline changes on purpose; evaluate.py always writes the live run to the gitignored evaluation/results.json, never this file.",
+  "note": "Frozen reference run from #102 (22-question dataset, gpt-4o generation). RAGAS metrics are LLM-judged and drift +/-0.03-0.05 run-to-run; this is a point-in-time reference for spotting regressions by eye, not a spec. Headline covers the 15 non-expected_fail questions; metrics_by_case_class breaks it down; expected_fail_metrics holds the aggregation + temporal cases (known limitations, scored separately). Regenerate deliberately (copy a clean evaluation/results.json here) only when the pipeline changes on purpose; evaluate.py always writes the live run to the gitignored evaluation/results.json, never this file. The `config` block was backfilled in #110 from the pinned deps + defaults in effect for this run.",
   "timestamp": "2026-08-27T09:28:34.194181+00:00",
   "dataset": "evaluation/test_dataset.json",
   "model": "gpt-4o",
+  "config": {
+    "rewrite_strategy": "hyde",
+    "retrieval_top_k": 20,
+    "rerank_top_n": 5,
+    "generation_model": "gpt-4o",
+    "generation_max_tokens": 1024,
+    "ragas_judge_model": "gpt-4o-mini",
+    "versions": {
+      "ragas": "0.2.6",
+      "openai": "1.54.0",
+      "sentence-transformers": "3.2.1",
+      "qdrant-client": "1.12.0",
+      "rank-bm25": "0.2.2"
+    }
+  },
   "num_questions": 22,
   "num_headline": 15,
   "num_scored": 20,

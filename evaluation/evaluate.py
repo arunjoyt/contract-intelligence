@@ -4,7 +4,12 @@ Loads evaluation/test_dataset.json, runs the pipeline against each question in a
 single pass (rewrite → hybrid search → rerank → generate), captures the raw
 retrieved chunk texts for RAGAS, then scores faithfulness, answer_relevancy,
 context_recall, and context_precision.  Results are written to
-evaluation/results.json.
+evaluation/results.json (including a `config` block recording the prompt /
+retrieval knobs and library versions the run used).
+
+The generation prompt, context-framing fields and top_k / top_n come from
+pipeline.constants -- the same module query_pipeline.py uses -- so a baseline
+scores the exact pipeline production runs, not a drifting copy (#110).
 
 Usage
 -----
@@ -34,43 +39,21 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from config import OPENAI_MODEL  # noqa: E402
+from pipeline.constants import (  # noqa: E402
+    ANSWER_SYSTEM_PROMPT,
+    CONTEXT_META_FIELDS,
+    GENERATION_MAX_TOKENS,
+    RERANK_TOP_N,
+    RETRIEVAL_TOP_K,
+)
 
 _DEFAULT_DATASET = _ROOT / "test_dataset.json"
 _DEFAULT_OUTPUT = _ROOT / "results.json"
 
-_ANSWER_SYSTEM = """\
-You are a contract analyst assistant. Answer the user's question using ONLY \
-the context below.
-
-Rules:
-- Cite every claim with [docname] immediately after the relevant sentence.
-- The context contains exact field values (status codes, dates, etc.) from \
-contract records. You may use ordinary language understanding to relate the \
-user's wording to those exact values -- e.g. "signed" may match "Unsigned" as its \
-negation; "terminated"/"ended" may match a status like "Cancelled". Interpreting \
-the plain meaning of a value that IS present in the context is not "outside knowledge."
-- Do not invent facts, entities, values, or numbers that do not appear in the context.
-- If the context genuinely contains nothing relevant to the question, respond with \
-exactly: "I could not find relevant information in the contract documents."
-
-Context:
-{context}
-"""
-
-# Mirrors pipeline/query_pipeline.py's _CONTEXT_META_FIELDS -- keep in sync.
-# (This duplication, and top_k/top_n/_ANSWER_SYSTEM below, is tracked for removal
-# in #110 -- evaluate.py should import these from the pipeline, not re-declare them.)
-_CONTEXT_META_FIELDS = (
-    "source_doctype",
-    "supplier",
-    "supplier_group",
-    "status",
-    "company",
-    "start_date",
-    "end_date",
-    "linked_doctype",
-    "linked_docname",
-)
+# RAGAS's metric LLM (faithfulness/answer_relevancy/context_* judging) is not the
+# app's OPENAI_MODEL -- it's ragas.llms.llm_factory's default. Recorded in the
+# results so a baseline says which judge produced it.
+_RAGAS_JUDGE_MODEL = "gpt-4o-mini"
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +110,7 @@ def _frame_chunk(chunk: dict) -> str:
     Unsigned`` that never appears in the chunk's own text.
     """
     docname = chunk.get("docname", "unknown")
-    meta_bits = [f"{key}: {value}" for key in _CONTEXT_META_FIELDS if (value := chunk.get(key))]
+    meta_bits = [f"{key}: {value}" for key in CONTEXT_META_FIELDS if (value := chunk.get(key))]
     meta_str = f" ({'; '.join(meta_bits)})" if meta_bits else ""
     return f"[{docname}]{meta_str}:\n{chunk.get('text', '')}"
 
@@ -141,8 +124,8 @@ def _run_question(
 ) -> tuple[str, list[str]]:
     """Return (answer, retrieved_contexts) in a single pipeline pass."""
     rewritten, _ = rewriter.rewrite(question)
-    candidates = hybrid_search.search(rewritten, None, top_k=20)
-    top_chunks = reranker.rerank(question, candidates, top_n=5)
+    candidates = hybrid_search.search(rewritten, None, top_k=RETRIEVAL_TOP_K)
+    top_chunks = reranker.rerank(question, candidates, top_n=RERANK_TOP_N)
 
     retrieved_contexts = [_frame_chunk(c) for c in top_chunks if c.get("text")]
     context = "\n\n---\n\n".join(retrieved_contexts)
@@ -150,11 +133,11 @@ def _run_question(
     response = openai_client.chat.completions.create(
         model=OPENAI_MODEL,
         messages=[
-            {"role": "system", "content": _ANSWER_SYSTEM.format(context=context)},
+            {"role": "system", "content": ANSWER_SYSTEM_PROMPT.format(context=context)},
             {"role": "user", "content": question},
         ],
         temperature=0.0,
-        max_tokens=1024,
+        max_tokens=GENERATION_MAX_TOKENS,
     )
     answer = response.choices[0].message.content or ""
     return answer, retrieved_contexts
@@ -300,6 +283,7 @@ def evaluate(dataset_path: Path, output_path: Path) -> None:
         "timestamp": datetime.now(UTC).isoformat(),
         "dataset": _repo_relative(dataset_path),
         "model": OPENAI_MODEL,
+        "config": _run_config(),
         "num_questions": len(entries),
         "num_headline": num_headline,
         "num_scored": len(samples),
@@ -324,6 +308,31 @@ def _repo_relative(path: Path) -> str:
         return str(path.resolve().relative_to(_PROJECT_ROOT))
     except ValueError:
         return path.name
+
+
+def _run_config() -> dict:
+    """Everything that shifts the numbers but isn't the dataset or the pipeline
+    code -- so a baseline is self-describing and two runs are comparable.
+    """
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as _pkg_version
+
+    versions: dict[str, str] = {}
+    for pkg in ("ragas", "openai", "sentence-transformers", "qdrant-client", "rank-bm25"):
+        try:
+            versions[pkg] = _pkg_version(pkg)
+        except PackageNotFoundError:
+            versions[pkg] = "not installed"
+
+    return {
+        "rewrite_strategy": os.environ.get("QUERY_REWRITE_STRATEGY", "hyde"),
+        "retrieval_top_k": RETRIEVAL_TOP_K,
+        "rerank_top_n": RERANK_TOP_N,
+        "generation_model": OPENAI_MODEL,
+        "generation_max_tokens": GENERATION_MAX_TOKENS,
+        "ragas_judge_model": _RAGAS_JUDGE_MODEL,
+        "versions": versions,
+    }
 
 
 _REFUSAL_MARKER = "could not find relevant information"

@@ -23,31 +23,19 @@ from typing import TYPE_CHECKING, Any
 from openai import OpenAI
 
 from config import OPENAI_MODEL
+from pipeline.constants import (
+    ANSWER_SYSTEM_PROMPT,
+    CONTEXT_META_FIELDS,
+    GENERATION_MAX_TOKENS,
+    RERANK_TOP_N,
+    RETRIEVAL_TOP_K,
+)
 from pipeline.query_rewriter import QueryRewriter
 from retrieval.hybrid_search import HybridSearch
 from retrieval.reranker import Reranker
 
 if TYPE_CHECKING:
     from langfuse import Langfuse
-
-_ANSWER_SYSTEM = """\
-You are a contract analyst assistant. Answer the user's question using ONLY \
-the context below.
-
-Rules:
-- Cite every claim with [docname] immediately after the relevant sentence.
-- The context contains exact field values (status codes, dates, etc.) from \
-contract records. You may use ordinary language understanding to relate the \
-user's wording to those exact values -- e.g. "signed" may match "Unsigned" as its \
-negation; "terminated"/"ended" may match a status like "Cancelled". Interpreting \
-the plain meaning of a value that IS present in the context is not "outside knowledge."
-- Do not invent facts, entities, values, or numbers that do not appear in the context.
-- If the context genuinely contains nothing relevant to the question, respond with \
-exactly: "I could not find relevant information in the contract documents."
-
-Context:
-{context}
-"""
 
 # Keywords used for heuristic doctype detection in the question text.
 _DOCTYPE_KEYWORDS: dict[str, list[str]] = {
@@ -111,14 +99,14 @@ class QueryPipeline:
             candidates = self._span(
                 trace,
                 "hybrid_search",
-                lambda: self._hybrid_search.search(rewritten, merged, top_k=20),
+                lambda: self._hybrid_search.search(rewritten, merged, top_k=RETRIEVAL_TOP_K),
                 summarize=_docnames,
             )
 
             top_chunks = self._span(
                 trace,
                 "rerank",
-                lambda: self._reranker.rerank(question, candidates, top_n=5),
+                lambda: self._reranker.rerank(question, candidates, top_n=RERANK_TOP_N),
                 summarize=_docnames,
             )
 
@@ -149,11 +137,11 @@ class QueryPipeline:
         response = self._client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[
-                {"role": "system", "content": _ANSWER_SYSTEM.format(context=context)},
+                {"role": "system", "content": ANSWER_SYSTEM_PROMPT.format(context=context)},
                 {"role": "user", "content": question},
             ],
             temperature=0.0,
-            max_tokens=1024,
+            max_tokens=GENERATION_MAX_TOKENS,
         )
         usage = {
             "input": response.usage.prompt_tokens,
@@ -210,19 +198,6 @@ def _docnames(chunks: list[dict]) -> list[str]:
     return [c.get("docname", "") for c in chunks]
 
 
-_CONTEXT_META_FIELDS = (
-    "source_doctype",
-    "supplier",
-    "supplier_group",
-    "status",
-    "company",
-    "start_date",
-    "end_date",
-    "linked_doctype",
-    "linked_docname",
-)
-
-
 def _build_context(chunks: list[dict]) -> str:
     """Serialize top chunks into a context block for the LLM prompt.
 
@@ -236,7 +211,7 @@ def _build_context(chunks: list[dict]) -> str:
     for chunk in chunks:
         docname = chunk.get("docname", "unknown")
         meta_bits = [
-            f"{key}: {value}" for key in _CONTEXT_META_FIELDS if (value := chunk.get(key))
+            f"{key}: {value}" for key in CONTEXT_META_FIELDS if (value := chunk.get(key))
         ]
         meta_str = f" ({'; '.join(meta_bits)})" if meta_bits else ""
         text = chunk.get("text", "")

@@ -1,0 +1,56 @@
+"""Shared query-pipeline constants.
+
+These define the generation contract and the retrieval budget for the query
+pipeline. ``evaluation/evaluate.py`` imports the same values so a baseline run
+exercises the exact prompt and top-k / top-n the live pipeline uses (#110) --
+before this module they were hand-copied into evaluate.py and had drifted.
+
+This module deliberately has no heavy imports, so it can be pulled in from
+anywhere (including evaluate.py's module scope) without loading openai /
+sentence-transformers / qdrant-client.
+"""
+
+from __future__ import annotations
+
+# Hybrid-search candidate pool size, then the cross-encoder rerank budget the
+# generator actually sees.
+RETRIEVAL_TOP_K = 20
+RERANK_TOP_N = 5
+
+# Generation call.
+GENERATION_MAX_TOKENS = 1024
+
+ANSWER_SYSTEM_PROMPT = """\
+You are a contract analyst assistant. Answer the user's question using ONLY \
+the context below.
+
+Rules:
+- Cite every claim with [docname] immediately after the relevant sentence.
+- The context contains exact field values (status codes, dates, etc.) from \
+contract records. You may use ordinary language understanding to relate the \
+user's wording to those exact values -- e.g. "signed" may match "Unsigned" as its \
+negation; "terminated"/"ended" may match a status like "Cancelled". Interpreting \
+the plain meaning of a value that IS present in the context is not "outside knowledge."
+- Do not invent facts, entities, values, or numbers that do not appear in the context.
+- If the context genuinely contains nothing relevant to the question, respond with \
+exactly: "I could not find relevant information in the contract documents."
+
+Context:
+{context}
+"""
+
+# Metadata fields surfaced into the per-chunk context block, in order. Some
+# doctypes carry fields (status, linked_doctype/linked_docname) that never make
+# it into the chunk's own text, so without this they'd be invisible to
+# generation even though retrieval has them.
+CONTEXT_META_FIELDS = (
+    "source_doctype",
+    "supplier",
+    "supplier_group",
+    "status",
+    "company",
+    "start_date",
+    "end_date",
+    "linked_doctype",
+    "linked_docname",
+)
