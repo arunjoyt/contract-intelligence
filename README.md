@@ -133,8 +133,7 @@ contract-intelligence/
 │       └── contract-intelligence.conf.template  # envsubst template for FRONTEND_DOMAIN/API_DOMAIN
 ├── .github/
 │   └── workflows/
-│       ├── ci.yml              # Lint + unit tests (every push)
-│       └── evaluate.yml        # RAGAS eval (disabled on GitHub pending #49)
+│       └── ci.yml              # Lint + unit tests (every push)
 ├── config.py                   # Central model config — OPENAI_MODEL, EMBEDDING_MODEL env vars
 ├── docker-compose.yml          # Production: all services on rag_internal, nginx on 80/443
 ├── docker-compose.frontend.yml # Dev override: exposes service ports directly to host
@@ -241,7 +240,7 @@ See `docs/DEPLOYMENT.md` for the required ERPNext webhook records and scripted s
 python evaluation/evaluate.py
 ```
 
-Runs RAGAS metrics (`faithfulness`, `answer_relevancy`, `context_recall`, `context_precision`) against `evaluation/test_dataset.json` and writes `evaluation/results.json` — a headline score plus a per-`case_class` breakdown. The dataset groups questions into slices: `showcase` (one per row of the **What It Does** table above — easy by design), `disambiguation` / `precision-multi` / `semantic-no-anchor` (the harder cases a regression shows up in), `refusal` (checked with a string match, not RAGAS), and `aggregation` / `temporal` (known-limitation queries, scored but excluded from the headline). Needs a live, fully-ingested Qdrant collection; against an empty collection `evaluate.py` seeds the ground-truth contexts so CI still produces a number. See `docs/ARCHITECTURE.md` § Evaluation.
+Runs RAGAS metrics (`faithfulness`, `answer_relevancy`, `context_recall`, `context_precision`) against `evaluation/test_dataset.json` and writes `evaluation/results.json` — a headline score plus a per-`case_class` breakdown. The dataset groups questions into slices: `showcase` (one per row of the **What It Does** table above — easy by design), `disambiguation` / `precision-multi` / `semantic-no-anchor` (the harder cases a regression shows up in), `refusal` (checked with a string match, not RAGAS), and `aggregation` / `temporal` (known-limitation queries, scored but excluded from the headline). This is a **manual local run**, not CI — it needs a fully-ingested Qdrant collection (run a full ingest first) so retrieval, chunking and parsing are all reflected in the scores. `evaluation/results.baseline.json` is the committed reference; refresh it in the same PR when a change is meant to move the numbers. See `docs/ARCHITECTURE.md` § Evaluation.
 
 ## CI/CD
 
@@ -249,6 +248,6 @@ Runs RAGAS metrics (`faithfulness`, `answer_relevancy`, `context_recall`, `conte
 - `ruff check .` — linting
 - `pytest tests/` — unit tests (no network required; OpenAI and Qdrant are mocked)
 
-`evaluate.yml` (RAGAS on merge to `main`, results uploaded as an artifact) exists but is **disabled on GitHub** pending #49 — the scores aren't thresholded or acted on yet, so scheduled runs would just spend OpenAI quota.
+That's the whole CI surface. RAGAS evaluation is **not** in CI — it's a manual local run (see [Evaluation](#evaluation) above). A judge-based score on ~17 headline questions is too noisy to gate a merge on; an automated gate is only worth revisiting once the dataset is substantially larger.
 
 Integration tests (`tests/test_integration.py`) require a live ERPNext + Qdrant instance and are opt-in via `RUN_INTEGRATION=1`. Run `./scripts/run_integration.sh` (optionally passing pytest args, e.g. `-m langfuse`) to save a durable log + self-contained HTML report under `test-results/` (gitignored) instead of only having them in your terminal scrollback.

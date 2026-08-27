@@ -307,9 +307,19 @@ for the decision record — accepted conditionally, reopen if the assumption abo
 
 `evaluation/evaluate.py` scores the full query pipeline (rewrite → hybrid search → rerank →
 generate) against `evaluation/test_dataset.json` and writes `evaluation/results.json` (gitignored —
-a per-run artifact). `evaluation/results.baseline.json` is a committed, deliberately-updated frozen
-run: the reference point for #49's threshold gating and for spotting regressions. Refresh it (copy a
-clean `results.json` over it) only when the pipeline changes on purpose.
+a per-run artifact). It is a **manual local run** — not wired into CI (see below). `evaluation/results.baseline.json`
+is a committed, deliberately-updated frozen run: the reference for spotting regressions by eye.
+Refresh it (copy a clean `results.json` over it) in the same PR as any pipeline change that is
+meant to move the numbers.
+
+### Not in CI
+
+The eval is deliberately not a merge gate. An LLM-judge score over ~15 headline questions wobbles
+±0.03–0.05 run-to-run (see Caveats), so a hard threshold would fire on noise and get muted; and the
+harness only exercises retrieval-ranking + generation over an already-indexed corpus — chunking and
+parsing changes don't show up until a re-ingest. Run it by hand when you touch the rewriter, fusion,
+reranker, or the generation prompt, and compare against `results.baseline.json`. An automated gate is
+only worth building once the dataset is substantially larger (order 150+ questions).
 
 ### The dataset
 
@@ -336,9 +346,11 @@ excluded from the headline so they don't mask a real regression elsewhere.
 (e.g. `status: Unsigned`) that never appears in the chunk's own text. `evaluate.py` frames the
 retrieved chunks the same way (`_frame_chunk`) so RAGAS compares like with like.
 
-When the Qdrant collection is empty (CI), `_seed_from_ground_truth()` upserts the
-`ground_truth_contexts` strings so a number still comes out — but that run is not testing retrieval,
-only generation. A real run needs a live, fully-ingested collection.
+`evaluate.py` runs against whatever is already in the Qdrant collection and exits with an error if
+it is empty — a real run needs a live, fully-ingested collection so retrieval, chunking and parsing
+are all reflected. (The `@live` integration tests in `tests/test_integration.py` seed the
+`ground_truth_contexts` strings into a throwaway collection themselves, purely to smoke-test that
+the script produces a valid `results.json`.)
 
 ### Metrics — what the LLM judge actually does
 
@@ -387,15 +399,16 @@ context_precision 0.91, refusal 2/2. By slice:
 
 Caveats:
 
-- **Nondeterministic.** LLM-judge scores wobble ±0.03–0.05 run-to-run on identical inputs. Any CI
-  threshold (#49) must sit well below the baseline, not at it, and should be set per `case_class`.
+- **Nondeterministic.** LLM-judge scores wobble ±0.03–0.05 run-to-run on identical inputs — one of
+  the reasons the eval is not a merge gate. Compare a run against the baseline per `case_class`, not
+  on the headline alone, and treat a single-slice move within that band as noise.
 - **Still smallish N.** 15 headline questions, 2–4 per slice. Directional; it will not cleanly
   separate close configurations (HyDE vs step-back) — an ablation needs the slices deepened further.
 - **`expected_fail` is scored, not skipped.** `aggregation` + `temporal` land in
   `expected_fail_metrics` (baseline: f 0.57 / cr 0.23 / cp 0.23, n=5) so the known limitations stay
   measured without dragging the headline.
 - **Costs OpenAI quota.** Generation (`gpt-4o`) + judge (`gpt-4o-mini`) calls per run;
-  `results.json` records which generation model produced it. `evaluate.yml` is disabled pending #49.
+  `results.json` records which generation model produced it.
 
 ## Testing Strategy
 
