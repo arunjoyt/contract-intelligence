@@ -4,9 +4,7 @@ PyJWT==2.9.0
 uvicorn[standard]==0.30.6
 
 # Orchestration & LLM
-langchain==0.3.7
-langchain-openai==0.2.6
-langchain-community==0.3.5
+langchain==0.3.7  # RecursiveCharacterTextSplitter only — see docs/adr/0002-no-langchain-framework.md
 openai==1.54.0
 
 # Vector store & retrieval

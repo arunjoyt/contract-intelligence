@@ -120,18 +120,22 @@ interface (two methods each) that every call site depends on instead of a concre
 that interface (a mechanical move, not a rewrite), and `LLM_PROVIDER`/`EMBEDDING_PROVIDER` env vars
 (default `openai`) dispatching to the right adapter class.
 
-`langchain`, `langchain-openai`, and `langchain-community` are already dependencies (used today only
-for `RecursiveCharacterTextSplitter` in `ingestion/chunker.py`) and were considered for this instead
-of a hand-rolled adapter — LangChain's `init_chat_model` factory does exist in the pinned version
-and would normalize the response shape across providers in one move. Rejected for now: it's real
-added dependency/version-risk surface for a swap that isn't happening, versus a hand-rolled adapter
-that stays fully within the codebase's own control and is no larger for the one provider (OpenAI)
-actually in use today.
+LangChain was considered for this instead of a hand-rolled adapter — its `init_chat_model` factory
+exists in the pinned `langchain` version and would normalize the response shape across providers in
+one move. Rejected: it's real added dependency/version-risk surface for a swap that isn't happening,
+versus a hand-rolled adapter that stays fully within the codebase's own control and is no larger for
+the one provider (OpenAI) actually in use today. `langchain` is kept only for
+`RecursiveCharacterTextSplitter` in `ingestion/chunker.py`; `langchain-openai` and
+`langchain-community` were declared but never imported and have been removed (ADR 0002).
 
 Either approach touches the OpenAI-response-shape mocking in `tests/test_query_rewriter.py`,
 `tests/test_query_pipeline.py`, and `tests/test_embedder.py` (currently hand-rolled `MagicMock`
 chains matching `.choices[0].message.content` / `.data[i].embedding`). Deferred — see #51; not
 prioritized since no provider swap is currently planned.
+
+The full "what LangChain core provides, what this project uses instead, and why" comparison —
+covering model wrappers, LCEL, loaders, retrievers, memory, callbacks, and LangGraph — lives in
+**ADR 0002** (`docs/adr/0002-no-langchain-framework.md`).
 
 For the concrete steps to switch provider with today's codebase as-is (no adapter layer), see
 `docs/MODEL_PROVIDER_SWAP.md`.
