@@ -1,0 +1,61 @@
+{
+  "note": "Frozen reference run \u2014 the honest baseline from #99, against the current demo data. These scores are a \"pipeline is not broken\" signal, NOT a quality measurement: the dataset is easy by construction (README showcase questions, ~60-chunk corpus so context_recall is near-unavoidable, distinctive supplier tokens, near-verbatim ground truth, N=6). RAGAS metrics are LLM-judged and drift +/-0.03-0.05 run-to-run. Regenerate deliberately (copy a clean evaluation/results.json here) only when the pipeline changes on purpose; evaluate.py always writes the live run to the gitignored evaluation/results.json, never this file. A harder dataset is tracked separately.",
+  "timestamp": "2026-08-27T08:15:45.841026+00:00",
+  "dataset": "evaluation/test_dataset.json",
+  "num_questions": 7,
+  "num_scored": 6,
+  "num_refusal_cases": 1,
+  "metrics": {
+    "faithfulness": 0.875,
+    "answer_relevancy": 0.9554,
+    "context_recall": 0.9583,
+    "context_precision": 0.8713,
+    "refusal_handled": 1.0
+  },
+  "per_question": [
+    {
+      "capability": "Hybrid search \u2014 exact term (BM25)",
+      "question": "What penalty applies if Zuckerman Security Ltd. exceeds two service level incidents in a quarter?",
+      "answer": "If Zuckerman Security Ltd. exceeds two service level incidents in a calendar quarter, a penalty equal to 5% of the quarterly invoice amount shall apply for each additional incident [CON-2026-00022].",
+      "retrieved_context_count": 5
+    },
+    {
+      "capability": "Hybrid search \u2014 paraphrase (vector)",
+      "question": "Which supplier bears the cost of replacing defective goods delivered under warranty?",
+      "answer": "Alpha Supplies Ltd. bears the cost of replacing defective goods delivered under warranty, including shipping costs for the return and replacement [CON-2026-00026].",
+      "retrieved_context_count": 5
+    },
+    {
+      "capability": "Cross-document synthesis (reranker)",
+      "question": "Compare the payment terms across our contracts with Alpha Supplies Ltd. and Summit Traders Ltd.",
+      "answer": "The payment terms for the contracts with Alpha Supplies Ltd. and Summit Traders Ltd. are as follows:\n\n- For Alpha Supplies Ltd., the payment terms in the active contract (CON-2026-00026) are Net 30, meaning payment is due within 30 days of the invoice date [CON-2026-00026].\n\n- For Summit Traders Ltd., both the inactive addendum (CON-2026-00025) and the unsigned contract (CON-2026-00024) have payment terms of Net 45, meaning payment is due within 45 days of the invoice date [CON-2026-00025] [CON-2026-00024].",
+      "retrieved_context_count": 5
+    },
+    {
+      "capability": "HyDE query rewriting (abstract question)",
+      "question": "What recourse do we have if a security services vendor doesn't perform to the agreed standard?",
+      "answer": "If a security services vendor, such as Zuckerman Security Ltd., does not perform to the agreed standard, there are a couple of recourses available according to the contract [CON-2026-00022]:\n\n1. **Service Level Agreement Penalty**: If Zuckerman Security Ltd. exceeds the maximum of two service level incidents per calendar quarter, a penalty equal to 5% of the quarterly invoice amount shall apply for each additional incident.\n\n2. **Termination for Cause**: Either party may terminate the agreement for cause upon written notice, subject to a fifteen (15) day cure period during which the breaching party may remedy the default.",
+      "retrieved_context_count": 5
+    },
+    {
+      "capability": "Plain-language \u2194 exact-value interpretation",
+      "question": "Has our contract with Zuckerman Security Ltd. been signed yet?",
+      "answer": "No, the contracts with Zuckerman Security Ltd. have not been signed. One contract is in \"Cancelled\" status [CON-2026-00023], and the other is in \"Unsigned\" status [CON-2026-00022].",
+      "retrieved_context_count": 5
+    },
+    {
+      "capability": "Grounded refusal (no hallucination)",
+      "question": "What's our contract value with a supplier called Globex Corp?",
+      "answer": "I could not find relevant information in the contract documents.",
+      "retrieved_context_count": 5,
+      "refusal_case": true,
+      "refusal_handled": true
+    },
+    {
+      "capability": "PDF ingestion",
+      "question": "What is Zuckerman Security Ltd.'s liability cap under the attached contract PDF, and how quickly can either party terminate for cause?",
+      "answer": "Zuckerman Security Ltd.'s liability cap under the contract is the total aggregate liability of either party arising under the agreement, which shall not exceed an amount equal to twelve (12) months' fees paid under the contract [CON-2026-00022]. Either party may terminate the agreement for cause upon written notice, subject to a fifteen (15) day cure period during which the breaching party may remedy the default [CON-2026-00022].",
+      "retrieved_context_count": 5
+    }
+  ]
+}

@@ -15,7 +15,7 @@ architecture:
 | HyDE query rewriting (abstract question) | "What recourse do we have if a security services vendor doesn't perform to the agreed standard?" |
 | Plain-language ↔ exact-value interpretation | "Has our contract with Zuckerman Security Ltd. been signed yet?" |
 | Grounded refusal (no hallucination) | "What's our contract value with a supplier called Globex Corp?" |
-| PDF ingestion | "What is Zuckerman Security Ltd.'s liability cap under the signed contract PDF, and how quickly can either party terminate for cause?" |
+| PDF ingestion | "What is Zuckerman Security Ltd.'s liability cap under the attached contract PDF, and how quickly can either party terminate for cause?" |
 
 ## Architecture
 
@@ -133,7 +133,8 @@ contract-intelligence/
 │       └── contract-intelligence.conf.template  # envsubst template for FRONTEND_DOMAIN/API_DOMAIN
 ├── .github/
 │   └── workflows/
-│       └── ci.yml              # Lint, test, evaluate
+│       ├── ci.yml              # Lint + unit tests (every push)
+│       └── evaluate.yml        # RAGAS eval (disabled on GitHub pending #49)
 ├── config.py                   # Central model config — OPENAI_MODEL, EMBEDDING_MODEL env vars
 ├── docker-compose.yml          # Production: all services on rag_internal, nginx on 80/443
 ├── docker-compose.frontend.yml # Dev override: exposes service ports directly to host
@@ -240,13 +241,14 @@ See `docs/DEPLOYMENT.md` for the required ERPNext webhook records and scripted s
 python evaluation/evaluate.py
 ```
 
-Runs RAGAS metrics (`faithfulness`, `answer_relevancy`, `context_recall`, `context_precision`) against `evaluation/test_dataset.json` and writes scores to `evaluation/results.json`.
+Runs RAGAS metrics (`faithfulness`, `answer_relevancy`, `context_recall`, `context_precision`) against `evaluation/test_dataset.json` and writes scores to `evaluation/results.json`. The dataset has one question per row of the **What It Does** table above — each exercising a distinct part of the pipeline — plus a grounded-refusal case that is checked with a refusal-string match (`refusal_handled`) rather than RAGAS. Needs a live, fully-ingested Qdrant collection; against an empty collection `evaluate.py` seeds the ground-truth contexts so CI still produces a number (see #99).
 
 ## CI/CD
 
-GitHub Actions runs on every push:
+`ci.yml` runs on every push:
 - `ruff check .` — linting
 - `pytest tests/` — unit tests (no network required; OpenAI and Qdrant are mocked)
-- On merge to `main`: RAGAS evaluation with results uploaded as artifact
+
+`evaluate.yml` (RAGAS on merge to `main`, results uploaded as an artifact) exists but is **disabled on GitHub** pending #49 — the scores aren't thresholded or acted on yet, so scheduled runs would just spend OpenAI quota.
 
 Integration tests (`tests/test_integration.py`) require a live ERPNext + Qdrant instance and are opt-in via `RUN_INTEGRATION=1`. Run `./scripts/run_integration.sh` (optionally passing pytest args, e.g. `-m langfuse`) to save a durable log + self-contained HTML report under `test-results/` (gitignored) instead of only having them in your terminal scrollback.
