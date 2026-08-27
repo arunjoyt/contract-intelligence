@@ -23,7 +23,7 @@ Every call site reads `OPENAI_API_KEY` directly via `os.environ`:
 - `pipeline/query_rewriter.py:44`
 - `pipeline/query_pipeline.py:93`
 - `ingestion/embedder.py:22`
-- `evaluation/evaluate.py:249`
+- `evaluation/evaluate.py:251`
 
 Replace with the new provider's key env var name at each site, and update `.env.example`/`.env`
 (`.env.example:13`, the "OpenAI (embeddings + GPT-4o)" section).
@@ -51,7 +51,7 @@ No shortcuts here — each one directly calls the OpenAI SDK and unpacks its res
 | `pipeline/query_rewriter.py` | `_hyde()` (`:57-59`, temp 0.7) and `_step_back()` (`:69-71`, temp 0.3) both call `self._client.chat.completions.create(...)` | `response.choices[0].message.content` (`:67`, `:79`) |
 | `pipeline/query_pipeline.py` | `_generate()` (`:156-158`, temp 0.0) | `response.choices[0].message.content` (`:166`) |
 | `ingestion/embedder.py` | `embed_texts()`'s batched loop (`:36`) calls `self._client.embeddings.create(...)` | `item.embedding for item in response.data` (`:37`) |
-| `evaluation/evaluate.py` | `_run_question()` (`:215-216`, temp 0.0) — mirrors `query_pipeline._generate()` for eval purposes | `response.choices[0].message.content` (`:224`) |
+| `evaluation/evaluate.py` | `_run_question()` (`:217-218`, temp 0.0) — mirrors `query_pipeline._generate()` for eval purposes | `response.choices[0].message.content` (`:226`) |
 
 For each: replace the client construction, replace the API call with the new provider's equivalent,
 and replace the response-shape unpacking. There are 4 independent `OpenAI()` client instances today

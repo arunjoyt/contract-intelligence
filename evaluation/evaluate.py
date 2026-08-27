@@ -76,7 +76,7 @@ _CONTEXT_META_FIELDS = (
 # every run and has no live ERPNext to ingest from).
 # ---------------------------------------------------------------------------
 
-_DOCNAME_RE = re.compile(r"\b([A-Z]{2,10}-\d{3,})\b")
+_DOCNAME_RE = re.compile(r"\b([A-Z]{2,10}-\d{3,}(?:-\d{3,})?)\b")
 _SUPPLIER_RE = re.compile(r"^Supplier ([^:]+):")
 
 
@@ -185,6 +185,20 @@ def _build_components(entries: list[dict]):
 # ---------------------------------------------------------------------------
 
 
+def _frame_chunk(chunk: dict) -> str:
+    """One retrieved chunk as the generator sees it: ``[docname] (metadata):\\n text``.
+
+    Same shape as ``query_pipeline._build_context``.  RAGAS scores against this
+    framed form (not the bare ``text``) so faithfulness / context precision /
+    recall see the metadata the answer actually relies on — e.g. a ``status:
+    Unsigned`` that never appears in the chunk's own text.
+    """
+    docname = chunk.get("docname", "unknown")
+    meta_bits = [f"{key}: {value}" for key in _CONTEXT_META_FIELDS if (value := chunk.get(key))]
+    meta_str = f" ({'; '.join(meta_bits)})" if meta_bits else ""
+    return f"[{docname}]{meta_str}:\n{chunk.get('text', '')}"
+
+
 def _run_question(
     question: str,
     rewriter,
@@ -192,24 +206,13 @@ def _run_question(
     reranker,
     openai_client,
 ) -> tuple[str, list[str]]:
-    """Return (answer, retrieved_context_texts) in a single pipeline pass."""
+    """Return (answer, retrieved_contexts) in a single pipeline pass."""
     rewritten, _ = rewriter.rewrite(question)
     candidates = hybrid_search.search(rewritten, None, top_k=20)
     top_chunks = reranker.rerank(question, candidates, top_n=5)
 
-    retrieved_texts = [c.get("text", "") for c in top_chunks if c.get("text")]
-
-    # Build context block and generate answer (same logic as query_pipeline._build_context)
-    parts: list[str] = []
-    for chunk in top_chunks:
-        docname = chunk.get("docname", "unknown")
-        meta_bits = [
-            f"{key}: {value}" for key in _CONTEXT_META_FIELDS if (value := chunk.get(key))
-        ]
-        meta_str = f" ({'; '.join(meta_bits)})" if meta_bits else ""
-        text = chunk.get("text", "")
-        parts.append(f"[{docname}]{meta_str}:\n{text}")
-    context = "\n\n---\n\n".join(parts)
+    retrieved_contexts = [_frame_chunk(c) for c in top_chunks if c.get("text")]
+    context = "\n\n---\n\n".join(retrieved_contexts)
 
     response = openai_client.chat.completions.create(
         model=OPENAI_MODEL,
@@ -221,7 +224,7 @@ def _run_question(
         max_tokens=1024,
     )
     answer = response.choices[0].message.content or ""
-    return answer, retrieved_texts
+    return answer, retrieved_contexts
 
 
 # ---------------------------------------------------------------------------
@@ -249,11 +252,18 @@ def evaluate(dataset_path: Path, output_path: Path) -> None:
 
     samples: list[SingleTurnSample] = []
     per_question: list[dict] = []
+    refusal_results: list[bool] = []
 
     for i, entry in enumerate(entries, 1):
         question: str = entry["question"]
+        capability: str = entry.get("capability", "")
         reference_contexts: list[str] = entry["ground_truth_contexts"]
         reference_answer: str = entry.get("ground_truth_answer", "")
+        # An entry with no ground-truth contexts is a grounded-refusal case
+        # (e.g. the Globex supplier that is never seeded). RAGAS's answer/context
+        # metrics have no meaning for "correctly answered nothing", so these are
+        # checked with a plain refusal-string match and kept out of the RAGAS set.
+        is_refusal_case = not reference_contexts
 
         logger.info("[%d/%d] %s", i, len(entries), question[:80])
         try:
@@ -262,6 +272,21 @@ def evaluate(dataset_path: Path, output_path: Path) -> None:
             )
         except Exception:
             logger.exception("Pipeline failed for question %d — skipping", i)
+            continue
+
+        if is_refusal_case:
+            handled = _is_refusal(answer)
+            refusal_results.append(handled)
+            per_question.append(
+                {
+                    "capability": capability,
+                    "question": question,
+                    "answer": answer,
+                    "retrieved_context_count": len(retrieved_contexts),
+                    "refusal_case": True,
+                    "refusal_handled": handled,
+                }
+            )
             continue
 
         # Safety net only — with ground-truth seeding in _build_components(),
@@ -274,6 +299,7 @@ def evaluate(dataset_path: Path, output_path: Path) -> None:
 
         per_question.append(
             {
+                "capability": capability,
                 "question": question,
                 "answer": answer,
                 "retrieved_context_count": len(retrieved_contexts),
@@ -290,35 +316,59 @@ def evaluate(dataset_path: Path, output_path: Path) -> None:
             )
         )
 
-    if not samples:
+    if not samples and not refusal_results:
         logger.error("No samples collected — aborting")
         sys.exit(1)
 
-    logger.info("Running RAGAS on %d samples …", len(samples))
-    dataset = EvaluationDataset(samples=samples)
-    ragas_result = ragas_evaluate(
-        dataset=dataset,
-        metrics=[faithfulness, answer_relevancy, context_recall, context_precision],
-        raise_exceptions=False,
-    )
-
-    metrics: dict[str, float] = {
-        "faithfulness": _safe_mean(ragas_result, "faithfulness"),
-        "answer_relevancy": _safe_mean(ragas_result, "answer_relevancy"),
-        "context_recall": _safe_mean(ragas_result, "context_recall"),
-        "context_precision": _safe_mean(ragas_result, "context_precision"),
-    }
+    metrics: dict[str, float] = {}
+    if samples:
+        logger.info("Running RAGAS on %d samples …", len(samples))
+        dataset = EvaluationDataset(samples=samples)
+        ragas_result = ragas_evaluate(
+            dataset=dataset,
+            metrics=[faithfulness, answer_relevancy, context_recall, context_precision],
+            raise_exceptions=False,
+        )
+        metrics = {
+            "faithfulness": _safe_mean(ragas_result, "faithfulness"),
+            "answer_relevancy": _safe_mean(ragas_result, "answer_relevancy"),
+            "context_recall": _safe_mean(ragas_result, "context_recall"),
+            "context_precision": _safe_mean(ragas_result, "context_precision"),
+        }
+    if refusal_results:
+        metrics["refusal_handled"] = round(sum(refusal_results) / len(refusal_results), 4)
     logger.info("Metrics: %s", metrics)
 
     output = {
         "timestamp": datetime.now(UTC).isoformat(),
-        "dataset": str(dataset_path),
-        "num_questions": len(samples),
+        "dataset": _repo_relative(dataset_path),
+        "num_questions": len(entries),
+        "num_scored": len(samples),
+        "num_refusal_cases": len(refusal_results),
         "metrics": metrics,
         "per_question": per_question,
     }
     output_path.write_text(json.dumps(output, indent=2, default=str))
     logger.info("Results written to %s", output_path)
+
+
+def _repo_relative(path: Path) -> str:
+    """Path relative to the repo root when it lives inside it, else the bare name.
+
+    Keeps ``results.json`` free of machine-specific absolute paths.
+    """
+    try:
+        return str(path.resolve().relative_to(_PROJECT_ROOT))
+    except ValueError:
+        return path.name
+
+
+_REFUSAL_MARKER = "could not find relevant information"
+
+
+def _is_refusal(answer: str) -> bool:
+    """True if the answer is the pipeline's grounded-refusal response."""
+    return _REFUSAL_MARKER in answer.lower()
 
 
 def _safe_mean(ragas_result, metric_name: str) -> float:

@@ -215,5 +215,7 @@ Allowed roles in both options: `Purchase Manager`, `Purchase User`, `Accounts Us
 ## CI
 
 GitHub Actions (`.github/workflows/ci.yml`): `ruff check .` and `pytest tests/` on every
-push (tests run with no network — OpenAI and Qdrant are mocked); RAGAS evaluation runs only on merge to
-`main`, with `evaluation/results.json` uploaded as an artifact.
+push (tests run with no network — OpenAI and Qdrant are mocked). RAGAS evaluation is a separate
+workflow (`.github/workflows/evaluate.yml`, on merge to `main`, `evaluation/results.json` uploaded as
+an artifact) that is currently **disabled on GitHub** pending #49 — scores aren't thresholded yet, so
+runs would only spend OpenAI quota.

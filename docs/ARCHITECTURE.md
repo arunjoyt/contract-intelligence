@@ -67,6 +67,27 @@ require a second, parallel retrieval path (an exact metadata-filtered fetch, e.g
 generation — a different architecture, not a tuning fix. See #45 for the original investigation and
 root-cause analysis; closed as out of scope.
 
+### Known Limitations — time-relative / temporal queries
+
+The pipeline cannot reliably answer questions that depend on "now" — "which contracts are active
+today," "what expires in the next 3 months," "anything signed since March." Two independent causes:
+
+1. **No date arithmetic anywhere in the query path.** `_extract_filters()` is keyword-only (doctype
+   and status); there is no date-range parsing and no comparison of `start_date`/`end_date` against
+   the current date. A question like "expiring soon" is handled as plain semantic search over clause
+   text, which has no notion of the calendar.
+2. **`status` is a point-in-time snapshot.** ERPNext computes a Contract's `status`
+   (`Active`/`Inactive`/`Unsigned`) live from `is_signed` + the date range, but ingestion freezes
+   whatever value was current at ingest time into the Qdrant payload. A contract that lapses the day
+   after a full ingest still reads `status: Active` in the index until the next re-ingest or webhook
+   fires.
+
+Supporting temporal queries would need date-aware filter extraction plus a retrieval path that
+evaluates ranges against `datetime.now()` at query time (and ideally a scheduled re-ingest to keep
+`status` fresh) — again a different architecture, not a tuning fix. This is also why
+`evaluation/test_dataset.json` contains no time-relative questions: a committed reference answer for
+"what is active now" would be wrong on most days it runs.
+
 ## Model Configuration
 
 Generation and embedding model names are centralized in `config.py`, set via the `OPENAI_MODEL`
@@ -276,6 +297,84 @@ authenticated user's identity/permissions through the query pipeline and into th
 (`filter_conditions` in `retrieval/vector_store.py`), not just gating `/query` at the door. See #60
 for the decision record — accepted conditionally, reopen if the assumption above breaks — and
 `docs/DOCUMENT_LEVEL_ACCESS_CONTROL.md` for the proposed solution.
+
+## Evaluation
+
+`evaluation/evaluate.py` scores the full query pipeline (rewrite → hybrid search → rerank →
+generate) against `evaluation/test_dataset.json` and writes `evaluation/results.json` (gitignored —
+a per-run artifact). `evaluation/results.baseline.json` is a committed, deliberately-updated frozen
+run: the reference point for #49's threshold gating and for spotting regressions. Refresh it (copy a
+clean `results.json` over it) only when the pipeline changes on purpose.
+
+### The dataset
+
+One entry per row of the README's **What It Does** table — each question is chosen to exercise a
+distinct part of the pipeline (BM25 exact-term, vector paraphrase, reranker cross-document, HyDE
+abstract, plain-language↔field interpretation, grounded refusal, PDF content). Entries are grounded
+in the current `scripts/seed_data/demo_data.yaml` fixtures with real `CON-YYYY-NNNNN` docnames. Each
+carries `question`, `ground_truth_contexts`, `ground_truth_answer`, and a `capability` label.
+
+`ground_truth_contexts` are written in the framed form the generator sees —
+`[docname] (status: …; supplier: …): text` — because some answers depend on payload metadata
+(e.g. `status: Unsigned`) that never appears in the chunk's own text. `evaluate.py` frames the
+retrieved chunks the same way (`_frame_chunk`) so RAGAS compares like with like.
+
+When the Qdrant collection is empty (CI), `_seed_from_ground_truth()` upserts the
+`ground_truth_contexts` strings so a number still comes out — but that run is not testing retrieval,
+only generation. A real run needs a live, fully-ingested collection.
+
+### Metrics — what the LLM judge actually does
+
+The ground truth is a *reference*, not an answer key: the pipeline's free-form answer and
+arbitrary chunk boundaries will never string-match a hand-authored reference, so RAGAS uses an LLM
+judge for semantic comparison. The four metrics use the reference differently — two not at all:
+
+| Metric | Uses `ground_truth_answer`? | What the judge does |
+|---|---|---|
+| `faithfulness` | No — checks against *retrieved contexts* | Splits the generated answer into atomic claims; verifies each is entailed by the retrieved chunks. Hallucination check. |
+| `answer_relevancy` | No — reference-free | Generates questions from the answer, embeds them, compares to the real question. Catches evasive / off-topic answers. |
+| `context_recall` | Yes | Splits the reference answer into claims; checks each is supported by the retrieved chunks. "Did retrieval fetch enough?" |
+| `context_precision` | Yes | Judges whether each retrieved chunk helped produce the reference answer, rank-weighted. "Is retrieval returning signal, well-ordered?" |
+
+Drop the ground truth and only the two reference-free metrics remain computable.
+
+### The refusal case
+
+The Globex entry has `ground_truth_contexts: []`. RAGAS's answer/context metrics are meaningless for
+"correctly answered nothing," so `evaluate.py` scores it with a plain refusal-string match
+(`_is_refusal` → `refusal_handled` fraction) and excludes it from the RAGAS set. "Did it refuse" is
+a discrete outcome — string matching is both correct and free here, the same reason
+`proj-ticket-rag` can use `ranx` rank-math for its retrieval-only eval.
+
+### Interpreting the numbers
+
+The baseline scores (faithfulness ~0.87, answer_relevancy ~0.95, context_recall ~0.96,
+context_precision ~0.87) are a **"pipeline isn't broken" signal, not a quality measurement.** The
+dataset is easy by construction:
+
+- **The questions are the README showcase set** — hand-picked to demonstrate each component working.
+  A random sample of real user questions would score lower.
+- **The corpus is tiny** (~60 chunks). Hybrid search pulls the top 20 into the candidate pool —
+  roughly a third of everything — so `context_recall` near 1.0 is close to unavoidable and says
+  little about retrieval skill. (`proj-ticket-rag` hit the same ceiling: recall@20 ≈ 1.0 on a small
+  set.)
+- **Every question has a distinctive lexical anchor** ("Zuckerman Security", "Coastal Warehousing")
+  that BM25 matches instantly. No near-duplicate contracts compete. There are no hard negatives, no
+  low-lexical-overlap cases, no disambiguation between a supplier's multiple contracts.
+- **The `ground_truth_contexts` are near-verbatim from the ingested text**, so the reference-vs-
+  retrieved semantic match is close to trivial.
+
+Also:
+
+- **Nondeterministic.** LLM-judge scores wobble ±0.03–0.05 run-to-run on identical inputs. Any CI
+  threshold (#49) must sit well below the baseline, not at it.
+- **Small N.** 6 scored questions — one question swings the mean ~0.16. Directional only; it cannot
+  separate close configurations (HyDE vs step-back).
+- **Costs OpenAI quota.** Generation + judge calls per run. `evaluate.yml` is disabled pending #49.
+
+A harder dataset — multiple contracts per supplier, near-miss distractors, paraphrased ground truth,
+aggregation queries, more refusal cases — is tracked in #102 and is the prerequisite for trusting
+these numbers or running an ablation.
 
 ## Testing Strategy
 

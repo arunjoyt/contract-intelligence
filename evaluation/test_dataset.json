@@ -1,54 +1,59 @@
 [
   {
-    "question": "What are the payment terms in the contract with Alpha Supplies Ltd?",
+    "capability": "Hybrid search — exact term (BM25)",
+    "question": "What penalty applies if Zuckerman Security Ltd. exceeds two service level incidents in a quarter?",
     "ground_truth_contexts": [
-      "Contract CON-00001 with Alpha Supplies Ltd: Payment Terms: Net 30 days from invoice date. Late payment penalty of 1.5% per month applies after the due date. All payments to be made via bank transfer to the supplier's designated account.",
-      "Contract CON-00001 (Alpha Supplies Ltd): Duration: 2024-01-01 to 2024-12-31. Status: Active. Governing Law: Indian Contract Act. Dispute resolution via arbitration in Mumbai."
+      "[CON-2026-00022] (source_doctype: Contract; supplier: Zuckerman Security Ltd.; status: Unsigned): This Master Services Agreement covers on-site security services provided by Zuckerman Security Ltd. at the buyer's primary facility, including guard staffing, access control monitoring, and incident response. Service Level Agreement. Zuckerman shall maintain a maximum of two (2) service level incidents per calendar quarter. Should this threshold be exceeded, a penalty equal to 5% of the quarterly invoice amount shall apply for each additional incident. Termination for Cause. Either party may terminate this agreement for cause with a 15-day cure period following written notice of breach."
     ],
-    "ground_truth_answer": "The contract with Alpha Supplies Ltd specifies Net 30 days payment terms from the invoice date, with a 1.5% per month late payment penalty."
+    "ground_truth_answer": "If Zuckerman Security Ltd. exceeds the permitted two service level incidents in a calendar quarter, a penalty equal to 5% of the quarterly invoice amount applies for each additional incident [CON-2026-00022]."
   },
   {
-    "question": "What contracts are currently active?",
+    "capability": "Hybrid search — paraphrase (vector)",
+    "question": "Which supplier bears the cost of replacing defective goods delivered under warranty?",
     "ground_truth_contexts": [
-      "Contract CON-00001: Supplier: Alpha Supplies Ltd, Status: Active, Start Date: 2024-01-01, End Date: 2024-12-31, Contract Value: 500000.00 INR.",
-      "Contract CON-00003: Supplier: Beta Tech Solutions, Status: Active, Start Date: 2024-03-01, End Date: 2025-02-28, Contract Value: 800000.00 INR.",
-      "Contract CON-00005: Supplier: Epsilon Services, Status: Active, Start Date: 2024-06-01, End Date: 2025-05-31, Contract Value: 150000.00 INR."
+      "[CON-2026-00026] (source_doctype: Contract; supplier: Alpha Supplies Ltd.; status: Active): This agreement covers the supply of corrugated packaging materials and custom cartons by Alpha Supplies Ltd. to the buyer's distribution centers. Payment Terms. Payment is due within 30 days of invoice date (Net 30). Warranty. Alpha Supplies Ltd. warrants all delivered goods against defects for a period of 90 days. Defective goods shall be replaced at Alpha's expense, including shipping costs for the return and replacement."
     ],
-    "ground_truth_answer": "There are three active contracts: CON-00001 with Alpha Supplies Ltd (until Dec 2024), CON-00003 with Beta Tech Solutions (until Feb 2025), and CON-00005 with Epsilon Services (until May 2025)."
+    "ground_truth_answer": "Alpha Supplies Ltd. bears that cost. Under its packaging supply agreement, defective goods are replaced at Alpha's expense — including return and replacement shipping — within a 90-day defect warranty period [CON-2026-00026]."
   },
   {
-    "question": "What are the warranty and return terms in our contracts?",
+    "capability": "Cross-document synthesis (reranker)",
+    "question": "Compare the payment terms across our contracts with Alpha Supplies Ltd. and Summit Traders Ltd.",
     "ground_truth_contexts": [
-      "Contract CON-00001 (Alpha Supplies Ltd) — Warranty clause: All goods supplied carry a 12-month warranty from date of delivery. Defective items must be reported within 7 days of receipt. Supplier shall replace or repair defective goods at no additional cost.",
-      "Contract CON-00003 (Beta Tech Solutions) — Returns policy: Hardware returns accepted within 30 days of delivery if defective. Software licenses are non-refundable once activated. RMA process must be initiated via the supplier's support portal.",
-      "Terms and Conditions TC-001: General return policy — goods may be returned within 14 days if they do not conform to the purchase order specifications. Return shipping costs borne by the supplier for defective goods."
+      "[CON-2026-00026] (source_doctype: Contract; supplier: Alpha Supplies Ltd.; status: Active): This agreement covers the supply of corrugated packaging materials and custom cartons by Alpha Supplies Ltd. to the buyer's distribution centers. Payment Terms. Payment is due within 30 days of invoice date (Net 30). Warranty. Alpha Supplies Ltd. warrants all delivered goods against defects for a period of 90 days.",
+      "[CON-2026-00024] (source_doctype: Contract; supplier: Summit Traders Ltd.; status: Unsigned): This agreement covers the supply of raw materials (structural steel and aluminum stock) by Summit Traders Ltd. to the buyer's manufacturing sites. Payment Terms. Payment is due within 45 days of invoice date (Net 45). Delivery. Summit Traders shall deliver against a rolling 8-week forecast provided monthly by the buyer; short-shipments must be made good within 10 business days.",
+      "[CON-2026-00025] (source_doctype: Contract; supplier: Summit Traders Ltd.; status: Inactive): This addendum expands the existing raw materials supply relationship with Summit Traders Ltd. to include inbound freight consolidation for shipments over 500kg. Payment Terms. Payment is due within 45 days of invoice date (Net 45), consistent with the base supply agreement."
     ],
-    "ground_truth_answer": "Warranty and return terms vary by contract. Alpha Supplies provides a 12-month warranty with 7-day defect reporting. Beta Tech Solutions allows hardware returns within 30 days but no software refunds. General T&C allow returns within 14 days for non-conforming goods."
+    "ground_truth_answer": "Alpha Supplies Ltd. is on Net 30 — payment due within 30 days of the invoice date [CON-2026-00026]. Summit Traders Ltd. is on Net 45 — payment due within 45 days of the invoice date — applied consistently across both its raw-materials supply agreement [CON-2026-00024] and its freight-consolidation addendum [CON-2026-00025]. Summit Traders' terms therefore allow 15 more days to pay than Alpha's."
   },
   {
-    "question": "What are the delivery timelines specified in the contract with Beta Tech Solutions?",
+    "capability": "HyDE query rewriting (abstract question)",
+    "question": "What recourse do we have if a security services vendor doesn't perform to the agreed standard?",
     "ground_truth_contexts": [
-      "Contract CON-00003 (Beta Tech Solutions) — Delivery Terms: Standard hardware delivery within 14 business days from purchase order date. Express delivery available at additional cost within 5 business days. Delivery to be made at buyer's registered address.",
-      "Contract CON-00003 (Beta Tech Solutions) — SLA: Software deployment within 30 days of contract signing. Technical support response time: P1 issues within 4 hours, P2 within 24 hours, P3 within 72 hours."
+      "[CON-2026-00022] (source_doctype: Contract; supplier: Zuckerman Security Ltd.; status: Unsigned): Service Level Agreement. Zuckerman shall maintain a maximum of two (2) service level incidents per calendar quarter. Should this threshold be exceeded, a penalty equal to 5% of the quarterly invoice amount shall apply for each additional incident. Termination for Cause. Either party may terminate this agreement for cause with a 15-day cure period following written notice of breach.",
+      "[CON-2026-00022] (source_doctype: Contract; supplier: Zuckerman Security Ltd.; status: Unsigned): Zuckerman Security Ltd. — Master Services Agreement. Liability Cap. The total aggregate liability of either party arising under this agreement shall not exceed an amount equal to twelve (12) months' fees paid under this contract. Termination for Cause. Either party may terminate this agreement for cause upon written notice, subject to a fifteen (15) day cure period during which the breaching party may remedy the default."
     ],
-    "ground_truth_answer": "The Beta Tech Solutions contract specifies standard hardware delivery within 14 business days (or 5 business days for express), software deployment within 30 days, and SLA response times of 4 hours for P1, 24 hours for P2, and 72 hours for P3 issues."
+    "ground_truth_answer": "For the security services vendor Zuckerman Security Ltd., the contracted recourse for underperformance is a penalty of 5% of the quarterly invoice amount for each service level incident beyond the two permitted per quarter, plus the right to terminate the agreement for cause after a 15-day cure period following written notice of breach [CON-2026-00022]. The vendor's total aggregate liability under the agreement is capped at twelve months' fees [CON-2026-00022]."
   },
   {
-    "question": "Which contracts are expiring within the next 3 months?",
+    "capability": "Plain-language ↔ exact-value interpretation",
+    "question": "Has our contract with Zuckerman Security Ltd. been signed yet?",
     "ground_truth_contexts": [
-      "Contract CON-00001: Supplier: Alpha Supplies Ltd, Status: Active, Start Date: 2024-01-01, End Date: 2024-12-31, Contract Value: 500000.00 INR.",
-      "Contract CON-00002: Supplier: Theta Packaging Ltd, Status: Active, Start Date: 2024-01-01, End Date: 2024-10-31, Contract Value: 200000.00 INR.",
-      "Contract CON-00004: Supplier: Iota Cleaning Services, Status: Active, Start Date: 2023-11-01, End Date: 2024-10-31, Contract Value: 120000.00 INR."
+      "[CON-2026-00022] (source_doctype: Contract; supplier: Zuckerman Security Ltd.; status: Unsigned; start_date: 2026-01-01; end_date: 2026-12-31): This Master Services Agreement covers on-site security services provided by Zuckerman Security Ltd. at the buyer's primary facility, including guard staffing, access control monitoring, and incident response."
     ],
-    "ground_truth_answer": "Contracts CON-00002 with Theta Packaging Ltd and CON-00004 with Iota Cleaning Services are expiring on 2024-10-31, within the next 3 months. CON-00001 with Alpha Supplies Ltd expires on 2024-12-31."
+    "ground_truth_answer": "No. The Master Services Agreement with Zuckerman Security Ltd. has a status of Unsigned — it has not been signed yet [CON-2026-00022]."
   },
   {
-    "question": "What are the penalty clauses in our supplier contracts?",
+    "capability": "Grounded refusal (no hallucination)",
+    "question": "What's our contract value with a supplier called Globex Corp?",
+    "ground_truth_contexts": [],
+    "ground_truth_answer": "I could not find relevant information in the contract documents."
+  },
+  {
+    "capability": "PDF ingestion",
+    "question": "What is Zuckerman Security Ltd.'s liability cap under the attached contract PDF, and how quickly can either party terminate for cause?",
     "ground_truth_contexts": [
-      "Contract CON-00001 (Alpha Supplies Ltd) — Penalty clause: Delayed delivery beyond agreed timeline incurs a penalty of 0.5% of the order value per day, capped at 10% of total contract value.",
-      "Contract CON-00003 (Beta Tech Solutions) — Liquidated damages: SLA breaches attract LD of 2% of monthly contract value per breach instance. Repeated breaches (3+ in a quarter) may result in contract termination.",
-      "Terms and Conditions TC-001 — General penalty terms: Supplier is liable for direct losses caused by non-performance. Force majeure events exempt the supplier from penalty for the duration of the event."
+      "[CON-2026-00022] (source_doctype: Contract; supplier: Zuckerman Security Ltd.; status: Unsigned): Zuckerman Security Ltd. — Master Services Agreement. Party: Zuckerman Security Ltd. 1. Liability Cap. The total aggregate liability of either party arising under this agreement shall not exceed an amount equal to twelve (12) months' fees paid under this contract. 2. Termination for Cause. Either party may terminate this agreement for cause upon written notice, subject to a fifteen (15) day cure period during which the breaching party may remedy the default."
     ],
-    "ground_truth_answer": "Penalty clauses vary: Alpha Supplies charges 0.5% per day for late delivery (max 10% of contract). Beta Tech Solutions applies 2% LD per SLA breach with termination rights for repeated breaches. General T&C exempt suppliers during force majeure."
+    "ground_truth_answer": "Under the attached contract PDF for Zuckerman Security Ltd., the total aggregate liability of either party is capped at twelve (12) months' fees paid under the contract [CON-2026-00022]. Either party may terminate the agreement for cause on written notice, subject to a 15-day cure period during which the breaching party may remedy the default [CON-2026-00022]."
   }
 ]
