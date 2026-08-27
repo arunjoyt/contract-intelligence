@@ -264,7 +264,7 @@ The Langfuse UI is accessible at `http://localhost:3000` (default docker-compose
 
 ### Future Enhancements — production quality monitoring (not implemented)
 
-Tracing tells you a query ran and how long it took; it says nothing about whether the answer was any good. RAGAS (`evaluation/evaluate.py`) only scores a fixed golden dataset in CI, so quality drift on real production questions currently goes undetected. Two independent options, not mutually exclusive:
+Tracing tells you a query ran and how long it took; it says nothing about whether the answer was any good. RAGAS (`evaluation/evaluate.py`) only scores a fixed golden dataset on a manual run, so quality drift on real production questions currently goes undetected. Two independent options, not mutually exclusive:
 
 1. **User feedback** — add thumbs up/down to the Streamlit chat UI (`frontend/app.py`), and on click call `Langfuse.score(trace_id=..., name="user_feedback", value=1|0)` against the trace ID of that query. Cheap to build; signal is real but low-volume (depends on users bothering to click).
 2. **LLM-as-judge sampling** — a periodic job (e.g. nightly, similar cadence to the deferred RAGAS-nightly idea above) pulls a sample of recent production traces from Langfuse via its API, runs an LLM judge over each `{question, answer, sources}` triple for faithfulness/relevancy, and writes the result back as a Langfuse score. Closer to RAGAS's signal, works without user participation, but costs an extra LLM call per sampled trace and needs a judge prompt/rubric.
@@ -345,6 +345,12 @@ excluded from the headline so they don't mask a real regression elsewhere.
 `[docname] (status: …; supplier: …): text` — because some answers depend on payload metadata
 (e.g. `status: Unsigned`) that never appears in the chunk's own text. `evaluate.py` frames the
 retrieved chunks the same way (`_frame_chunk`) so RAGAS compares like with like.
+
+`evaluate.py` imports the system prompt, `CONTEXT_META_FIELDS`, and the `top_k` / `top_n` /
+`max_tokens` values from `pipeline/constants.py` — the same module `query_pipeline.py` uses — so a
+baseline run exercises the exact prompt and retrieval budget the live pipeline does. `results.json`
+records a `config` block (rewrite strategy, judge model, generation model, top-k/top-n, pinned
+library versions) so a baseline is self-describing and two runs are comparable (#110).
 
 `evaluate.py` runs against whatever is already in the Qdrant collection and exits with an error if
 it is empty — a real run needs a live, fully-ingested collection so retrieval, chunking and parsing
