@@ -30,14 +30,11 @@ flowchart LR
 
     QD[(Qdrant)]
 
-    subgraph RET[Retrieval]
+    subgraph QUERY[Query pipeline]
         direction TB
-        BM25[BM25] & VEC[vector search] --> RRF[RRF fusion] --> RERANK[cross-encoder rerank]
-    end
-
-    subgraph PIPE[Pipeline]
-        direction TB
-        REWRITE[HyDE / step-back rewrite] --> GEN[GPT-4o generate + cite]
+        REWRITE[HyDE / step-back rewrite] --> SEARCH[BM25 + vector search → RRF fusion → top-20]
+        SEARCH --> RERANK[cross-encoder rerank → top-5]
+        RERANK --> GEN[GPT-4o generate + cite]
     end
 
     API[[FastAPI /query]]
@@ -46,12 +43,17 @@ flowchart LR
 
     ERP -- "REST + webhooks" --> ING
     ING -- "idempotent upsert" --> QD
-    QD --> RET
-    RET -- "top-5 chunks" --> PIPE
-    PIPE --> API
+    QUERY <-- "vector + BM25 lookup" --> QD
+    QUERY --> API
     API --> UI
-    PIPE -. "trace" .-> LF
+    QUERY -. "trace" .-> LF
 ```
+
+The subgraphs above are execution order, not code layout: query rewriting is the
+entry point of every request and runs *before* retrieval — the rewritten text is
+what BM25 and vector search actually match on. Retrieval then narrows top-20 →
+top-5 (rerank) before generation. See `pipeline/query_pipeline.py` and
+`docs/ARCHITECTURE.md` for the full data-flow.
 
 See `docs/ARCHITECTURE.md` for the full data-flow and schema breakdown.
 

@@ -21,24 +21,16 @@ ERPNext
 │  supplier, status, start_date,   │
 │  end_date                        │
 └──────────────┬───────────────────┘
-               │
-     ┌─────────▼──────────┐
-     │   Retrieval Layer   │
-     │  BM25 + vector →   │
-     │  RRF fusion →      │
-     │  Cross-encoder     │
-     │  rerank            │
-     └─────────┬──────────┘
-               │ top-5 chunks + metadata
+               │ queried by step 3 below (vector + BM25 lookup)
                ▼
 ┌──────────────────────────────────┐
-│         Pipeline Layer           │
-│  QueryRewriter (HyDE/step-back)  │
-│  → HybridSearch                  │
-│  → Reranker                      │
-│  → Prompt builder                │
-│  → GPT-4o                        │
-│  → Answer + source citations     │
+│      Query Pipeline (per request)│
+│  1. QueryRewriter (HyDE/step-back)│  ← entry point, runs before retrieval
+│  2. filter extraction (keywords) │
+│  3. HybridSearch → RRF → top-20  │
+│  4. Cross-encoder rerank → top-5 │
+│  5. Prompt builder → GPT-4o      │
+│  6. Answer + source citations    │
 └──────────┬──────────┬────────────┘
            │          │ Langfuse spans
            ▼          ▼
@@ -48,6 +40,10 @@ ERPNext
            ▼
         Streamlit
 ```
+
+The steps are execution order. Retrieval is *inside* the pipeline (step 3), driven
+by the rewritten query from step 1 — not a separate stage that runs first and hands
+the pipeline a top-5. See "Query Pipeline — Step by Step" below.
 
 ## Query Pipeline — Step by Step
 
