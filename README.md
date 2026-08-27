@@ -241,7 +241,7 @@ See `docs/DEPLOYMENT.md` for the required ERPNext webhook records and scripted s
 python evaluation/evaluate.py
 ```
 
-Runs RAGAS metrics (`faithfulness`, `answer_relevancy`, `context_recall`, `context_precision`) against `evaluation/test_dataset.json` and writes scores to `evaluation/results.json`. The dataset has one question per row of the **What It Does** table above — each exercising a distinct part of the pipeline — plus a grounded-refusal case that is checked with a refusal-string match (`refusal_handled`) rather than RAGAS. Needs a live, fully-ingested Qdrant collection; against an empty collection `evaluate.py` seeds the ground-truth contexts so CI still produces a number (see #99).
+Runs RAGAS metrics (`faithfulness`, `answer_relevancy`, `context_recall`, `context_precision`) against `evaluation/test_dataset.json` and writes `evaluation/results.json` — a headline score plus a per-`case_class` breakdown. The dataset groups questions into slices: `showcase` (one per row of the **What It Does** table above — easy by design), `disambiguation` / `precision-multi` / `semantic-no-anchor` (the harder cases a regression shows up in), `refusal` (checked with a string match, not RAGAS), and `aggregation` / `temporal` (known-limitation queries, scored but excluded from the headline). Needs a live, fully-ingested Qdrant collection; against an empty collection `evaluate.py` seeds the ground-truth contexts so CI still produces a number. See `docs/ARCHITECTURE.md` § Evaluation.
 
 ## CI/CD
 
