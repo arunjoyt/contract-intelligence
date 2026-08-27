@@ -126,7 +126,8 @@ contract-intelligence/
 │   ├── DEPLOYMENT.md           # Auth options, infra topology, webhook setup
 │   ├── SECURITY_REVIEW.md      # Security review findings and accepted risks
 │   ├── DOCUMENT_LEVEL_ACCESS_CONTROL.md  # Proposed future doc-level access control (#60, not implemented)
-│   └── MODEL_PROVIDER_SWAP.md  # Developer steps to switch LLM/embedding provider (#51)
+│   ├── MODEL_PROVIDER_SWAP.md  # Developer steps to switch LLM/embedding provider (#51)
+│   └── RETRIEVAL_TUNING.md     # How top_k / top_n / chunk_size would be tuned on a bigger eval set
 ├── nginx/
 │   ├── nginx.conf              # Base reverse-proxy config (Option B production)
 │   └── templates/

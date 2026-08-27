@@ -404,6 +404,8 @@ Caveats:
   on the headline alone, and treat a single-slice move within that band as noise.
 - **Still smallish N.** 15 headline questions, 2–4 per slice. Directional; it will not cleanly
   separate close configurations (HyDE vs step-back) — an ablation needs the slices deepened further.
+  See `docs/RETRIEVAL_TUNING.md` for how `top_k` / `top_n` / `chunk_size` would be tuned on a
+  bigger dataset.
 - **`expected_fail` is scored, not skipped.** `aggregation` + `temporal` land in
   `expected_fail_metrics` (baseline: f 0.57 / cr 0.23 / cp 0.23, n=5) so the known limitations stay
   measured without dragging the headline.
