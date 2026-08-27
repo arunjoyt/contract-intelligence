@@ -1,0 +1,206 @@
+# Pipeline Tuning — every knob from chunk to answer
+
+How the retrieval and generation knobs would be tuned properly. Right now they all
+hold conventional "retrieve wide, rerank narrow" defaults — **not values tuned on
+this corpus.** The eval harness that could tune them (`evaluation/evaluate.py`,
+per-`case_class` slicing) exists as of #102, but the dataset is still 2–4 questions
+per slice — too small to move a knob without fitting to noise.
+
+This doc walks the whole pipeline order: ingest → embed → rewrite → retrieve →
+rerank → generate.
+
+## The knobs
+
+| Knob | Value | Where | Stage | Controls | Tuning method |
+|---|---|---|---|---|---|
+| `chunk_size` | 512 | `ingestion/chunker.py` | ingest | characters per chunk | judge (interacts with `top_n`) |
+| `chunk_overlap` | 64 | `ingestion/chunker.py` | ingest | overlap between adjacent chunks | judge |
+| `EMBEDDING_MODEL` | `text-embedding-3-small` | `config.py` | ingest + query | the dense vector space | deterministic (`recall@k`) |
+| `QUERY_REWRITE_STRATEGY` | `hyde` | env / `pipeline/query_rewriter.py` | pre-retrieval | what text is embedded as the query vector | deterministic (`recall@k`) |
+| HyDE gen params | `temperature=0.7`, `max_tokens=256` | `pipeline/query_rewriter.py` | pre-retrieval | shape of the hypothetical doc | deterministic |
+| RRF `k` | 60 | `retrieval/hybrid_search.py:30` | fusion | rank-fusion smoothing constant (not a "top-k") | deterministic |
+| `RETRIEVAL_TOP_K` | 20 | `pipeline/constants.py:17` | retrieve → rerank | candidate pool the cross-encoder rescores | deterministic (`recall@k`) |
+| `RERANKER_MODEL` | `ms-marco-MiniLM-L-6-v2` | `retrieval/reranker.py` | rerank | cross-encoder that reorders the pool | deterministic (`nDCG@n`) |
+| `RERANK_TOP_N` | 5 | `pipeline/constants.py:18` | rerank → generate | chunks the LLM actually sees | judge |
+| `OPENAI_MODEL` | `gpt-4o` | `config.py` | generate | answer synthesis + citation quality | judge |
+| answer system prompt | — | `pipeline/query_pipeline.py`, `evaluation/evaluate.py` | generate | grounding, citation format, refusal behaviour | judge |
+
+## Two kinds of knob
+
+**Retrieval-only** — the knob changes only *which chunks come back*, not what the
+LLM does with them. Tune with deterministic IR metrics (`recall@k`, `MRR`,
+`nDCG@n`) computed straight from the fused/ranked list against qrels: no LLM judge,
+no OpenAI quota, no run-to-run noise. Covers `EMBEDDING_MODEL`,
+`QUERY_REWRITE_STRATEGY`, the HyDE params, RRF `k`, `RETRIEVAL_TOP_K`,
+`RERANKER_MODEL`.
+
+**Generator-dependent** — the knob changes what the LLM sees or is. Needs the full
+pipeline + RAGAS judge + the statistical treatment below. Covers `RERANK_TOP_N`,
+`OPENAI_MODEL`, the system prompt. `chunk_size` / `chunk_overlap` straddle both:
+retrieval quality at a given chunk size is deterministic, but the *right* chunk
+size interacts with `top_n` (bigger chunks carry more, so fewer are needed) so the
+final call needs the judge.
+
+Do the retrieval-only knobs first — they are cheap, deterministic, and they settle
+the candidate set that the generator knobs are then tuned against.
+
+## Prerequisites for a real tuning pass
+
+1. **qrels** — for each eval question, a label of which chunks are actually
+   relevant (the gold set). `ground_truth_contexts` in `test_dataset.json` is
+   close but is hand-authored prose, not chunk IDs; a tuning pass needs the
+   labels tied to real `docname:chunk_index` keys.
+2. **A bigger dataset** — ~100–200 questions, 15–30 per `case_class` (see the
+   power analysis below). Tracked as the follow-up to #102.
+3. **A dev/test split** — tune every knob on dev, report final numbers once on
+   held-out test. Tuning and reporting on the same set overfits to the eval.
+
+## General method — applies to every knob
+
+- **Slice by `case_class`.** The mean hides the answer. Recall and faithfulness
+  degrade on the hard slices (`semantic-no-anchor`, `disambiguation`,
+  `precision-multi`) — tune to those, not the aggregate.
+- **Paired comparison.** Same questions across every config → **Wilcoxon
+  signed-rank**, not an unpaired test. Much more sensitive.
+- **Bootstrap** the per-question scores for CIs, or run each config 3× and average
+  out judge noise. RAGAS scores wobble ±0.03–0.05 run-to-run on identical inputs;
+  to claim config A ≠ config B the intervals must separate.
+- **Power.** With per-question SD ~0.15 and wanting to detect a 0.05 gap at 80%
+  power, you need ~70 questions *per slice*. Hence the ~100–200 total above.
+- **Cost on the same plot.** tokens/query, $/query, p95 latency — every knob move
+  has a cost axis, plot it alongside quality.
+- **One knob at a time**, unless you suspect interaction (`chunk_size × top_n`) —
+  then a small grid, not a line.
+- **Decision rule.** The cheapest, fastest config whose quality is statistically
+  within noise of the best.
+
+## The order to tune in
+
+Each knob's pool or behaviour feeds the next, so tune in pipeline order:
+
+1. `chunk_size` / `chunk_overlap` — deterministic recall first, then revisit
+   against `top_n` at the end (Step E).
+2. `EMBEDDING_MODEL` — only if #101 / #90 make a swap real.
+3. `QUERY_REWRITE_STRATEGY` — Step A.
+4. RRF `k` — small deterministic sweep, k ∈ {10, 30, 60, 100}; RRF is
+   insensitive to k over wide ranges, so expect no move and leave it at 60.
+5. `RETRIEVAL_TOP_K` — Step B.
+6. `RERANKER_MODEL` — deterministic `nDCG@5` over the fixed Step B pool; a bigger
+   cross-encoder (e.g. `ms-marco-MiniLM-L-12` or a BGE reranker) trades latency
+   for ranking quality.
+7. `RERANK_TOP_N` — Step C.
+8. `OPENAI_MODEL`, then the system prompt — Step D.
+
+## Step A — `QUERY_REWRITE_STRATEGY` (retrieval-only)
+
+Three arms: `hyde` (default), `step_back`, and `none` (embed the raw question).
+
+**Priors:**
+
+- **HyDE** searches in answer-space — helps when the question's vocabulary
+  diverges from the corpus (`semantic-no-anchor`). Costs an extra `OPENAI_MODEL`
+  call (~0.5–1 s) per query, and on a ~60-chunk corpus a hallucinated entity in
+  the hypothetical doc can drag retrieval off-target.
+- **Step-back** abstracts the question — helps multi-hop / "why" questions, can
+  *lose* the specific anchor (supplier token, doc number) on point lookups.
+- This corpus is mostly point lookups with distinctive supplier tokens, and BM25
+  + reranker already handle those — so `none` is a real contender, not a
+  strawman.
+
+**Method:** for each arm, embed the (rewritten) query, run `HybridSearch.search()`,
+record the fused rank of every gold chunk. Compute `recall@20` and `MRR` per
+`case_class`. HyDE additionally gets a `temperature` sub-sweep (0.0 / 0.3 / 0.7) —
+a hotter hypothetical doc trades precision for recall.
+
+**Expected outcome:** intent-dependent — HyDE for `semantic-no-anchor`, `none` for
+`showcase` / `disambiguation`. If so, the fix is a cheap pre-retrieval intent
+classifier that picks the strategy, not one global env var. Record the decision as
+an ADR (`docs/adr/`).
+
+## Step B — `RETRIEVAL_TOP_K` (retrieval-only)
+
+The reranker can only reorder what it is handed; it cannot recover a chunk that
+RRF ranked 25th. So the pool must be wide enough to *contain* the gold chunk, but
+every extra candidate is another cross-encoder forward pass (cost linear in pool
+size). On a ~60-chunk corpus, 20 is a third of everything and recall into the pool
+is effectively 1.0 — which is why the current default is defensible without
+tuning.
+
+1. For each dev question, run `HybridSearch.search()` and record the fused rank of
+   every gold chunk.
+2. Compute **`recall@k`** for k ∈ {10, 20, 30, 50, 100} — the fraction of gold
+   chunks in the top-k of the fused list. Deterministic, no API calls.
+3. Plot `recall@k` and find the **knee** — the smallest k where recall plateaus
+   (e.g. ≥ 0.95). Past the knee you pay reranker latency for nothing.
+4. Break `recall@k` out **by `case_class`**; tune to the hard slices.
+5. Cross-check against **reranker latency vs pool size** (linear in `top_k`). If
+   recall is still climbing at the latency budget, take the largest k you can
+   afford; otherwise stop at the knee.
+
+Output: one `RETRIEVAL_TOP_K` value.
+
+## Step C — `RERANK_TOP_N` (generator-dependent)
+
+LLMs degrade with irrelevant context ("lost in the middle", distraction), and each
+chunk is ~512 tokens, so 5 ≈ 2.5k context tokens/query vs ~10k for 20 — 4× the
+generation cost for little gain on point-lookup questions. "3–5 passages" is the
+standard for passage-grounded QA, which is why 5 is defensible without tuning.
+
+Hold `RETRIEVAL_TOP_K` at the Step B value. Sweep `top_n ∈ {3, 5, 8, 10, 15}`. For
+each, run `evaluate.py` and record **per `case_class`**:
+
+| Signal | What it tells you |
+|---|---|
+| `faithfulness`, `answer_relevancy` on `showcase` | does more context *dilute* the easy cases? |
+| `context_recall` on `disambiguation` / `precision-multi` | does more context *recover* multi-answer material? |
+| `context_precision` | drops mechanically as `top_n` rises — watch, don't over-index |
+| answer correctness (exact / human, not just RAGAS) | the ground truth |
+| tokens/query, $/query, p95 latency | the cost axis, on the same plot |
+
+The value is the inflection point: where `context_recall` on the hard slices
+**stops improving** but `faithfulness` and cost **keep getting worse**.
+
+The one place `top_n = 5` clearly hurts is enumeration ("list all cancelled
+contracts" drops the 3rd match — see `docs/ARCHITECTURE.md` § Known Limitations).
+Raising `top_n` is the *wrong* fix there; that needs a separate metadata-filtered
+retrieval path (#45). Enumeration is scoped out rather than distorting `top_n` for
+the common case.
+
+## Step D — `OPENAI_MODEL` and the system prompt (generator-dependent)
+
+- **Model swap** — a judge + cost pass over the same dev set (`gpt-4o` vs
+  `gpt-4o-mini` vs a newer model vs a non-OpenAI model behind the #90 seam).
+  Watch `faithfulness` and citation-format compliance, not just answer_relevancy;
+  cheaper models tend to drop `[docname]` citations first.
+- **Prompt changes** — judged on `faithfulness` and refusal behaviour. This is
+  the one knob where the `expected_fail` refusal cases (`aggregation`,
+  `temporal`) matter most: a prompt tweak that makes the model answer instead of
+  refusing is a regression even if the headline moves up.
+- Either change means refreshing `evaluation/results.baseline.json` **in the same
+  PR** (per `CLAUDE.md` § CI).
+
+## Step E — expect the answer to not be a single number
+
+Likely conclusions:
+
+- `RETRIEVAL_TOP_K` = one global value (recall plateaus).
+- `QUERY_REWRITE_STRATEGY` and `RERANK_TOP_N` = **intent-dependent** — a rewrite
+  and `top_n` of 5 for point lookups, `none`/wider (or the metadata-filter path)
+  for enumeration / comparison intents. This means classifying intent before
+  retrieval, or always retrieving wide and letting the generator's own filtering
+  handle the common case.
+- `chunk_size` **interacts** with `top_n` — bigger chunks carry more per chunk, so
+  fewer are needed. A thorough pass sweeps `chunk_size × top_n` as a small grid
+  rather than fixing one.
+
+## Related
+
+- `docs/ARCHITECTURE.md` § Evaluation — the harness and `case_class` slices
+- `docs/ARCHITECTURE.md` § Known Limitations — why enumeration/temporal are out of scope
+- `pipeline/query_rewriter.py` — the two rewrite strategies
+- `config.py`, `pipeline/constants.py` — where the knobs live
+- `docs/MODEL_PROVIDER_SWAP.md` — swapping `OPENAI_MODEL` / `EMBEDDING_MODEL` provider
+- #102 — the harder eval dataset (prerequisite); its follow-up is the ~150-question set
+- #101 / #90 — local embedding model / provider-agnostic model seam
+- #49 — CI threshold gating, which also wants per-`case_class` numbers
+- #45 — the enumeration investigation, closed as out of scope
