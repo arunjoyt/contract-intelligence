@@ -76,17 +76,22 @@ today," "what expires in the next 3 months," "anything signed since March." Two 
    and status); there is no date-range parsing and no comparison of `start_date`/`end_date` against
    the current date. A question like "expiring soon" is handled as plain semantic search over clause
    text, which has no notion of the calendar.
-2. **`status` is a point-in-time snapshot.** ERPNext computes a Contract's `status`
-   (`Active`/`Inactive`/`Unsigned`) live from `is_signed` + the date range, but ingestion freezes
-   whatever value was current at ingest time into the Qdrant payload. A contract that lapses the day
-   after a full ingest still reads `status: Active` in the index until the next re-ingest or webhook
-   fires.
+2. **`status` goes stale, and a time-based change never reaches the index.** ERPNext derives a
+   Contract's `status` (`Active`/`Inactive`/`Unsigned`) from `is_signed` + the date range. Ingestion
+   copies whatever value is current into the Qdrant payload. It refreshes only when the webhook
+   fires — and the webhook fires on `on_update`/`on_submit`/`on_cancel`, i.e. a **human editing and
+   saving** the Contract. ERPNext's own daily refresh
+   (`contract.update_status_for_contracts()`) writes with `frappe.db.set_value`, a direct DB write
+   that runs no document events, so it does **not** fire the webhook — an `Active → Inactive` flip
+   from a lapsed `end_date` is invisible to the RAG index. (On the demo bench the scheduler is
+   disabled outright, so even ERPNext's `status` field is stale until a contract is re-saved.)
 
 Supporting temporal queries would need date-aware filter extraction plus a retrieval path that
-evaluates ranges against `datetime.now()` at query time (and ideally a scheduled re-ingest to keep
-`status` fresh) — again a different architecture, not a tuning fix. This is also why
-`evaluation/test_dataset.json` contains no time-relative questions: a committed reference answer for
-"what is active now" would be wrong on most days it runs.
+evaluates ranges against `datetime.now()` at query time, and a scheduled re-ingest (or a
+status-change hook that actually fires the webhook) to keep `status` fresh — a different
+architecture, not a tuning fix. The `temporal` slice of `evaluation/test_dataset.json` covers this
+boundary as `expected_fail` cases; the reference answers describe the correct result *and* why the
+pipeline can't produce it.
 
 ## Model Configuration
 
@@ -308,11 +313,23 @@ clean `results.json` over it) only when the pipeline changes on purpose.
 
 ### The dataset
 
-One entry per row of the README's **What It Does** table — each question is chosen to exercise a
-distinct part of the pipeline (BM25 exact-term, vector paraphrase, reranker cross-document, HyDE
-abstract, plain-language↔field interpretation, grounded refusal, PDF content). Entries are grounded
-in the current `scripts/seed_data/demo_data.yaml` fixtures with real `CON-YYYY-NNNNN` docnames. Each
-carries `question`, `ground_truth_contexts`, `ground_truth_answer`, and a `capability` label.
+~22 entries grounded in the current `scripts/seed_data/demo_data.yaml` fixtures with real
+`CON-YYYY-NNNNN` docnames. Each carries `question`, `ground_truth_contexts`, `ground_truth_answer`,
+a free-text `capability` label, a `case_class` (the slice key), and an optional `expected_fail`
+flag. `evaluate.py` reports one headline metric set plus a `metrics_by_case_class` breakdown.
+
+| `case_class` | What it stresses |
+|---|---|
+| `showcase` | One question per row of the README **What It Does** table — a distinct component each (BM25 exact-term, vector paraphrase, reranker cross-document, HyDE abstract, plain-language↔field, PDF). Easy by design. |
+| `disambiguation` | A supplier with two contracts (Alpha current vs superseded, Telstar primary vs backup, Vertex procurement vs support, Ashford live vs cancelled) — the near-duplicate must not be cited. |
+| `precision-multi` | "Which suppliers do X" — retrieval must return *all and only* the matches, against a top-5 rerank budget. |
+| `semantic-no-anchor` | No supplier name in the question — BM25 has nothing to grab, the dense side has to carry it. |
+| `refusal` | `ground_truth_contexts: []`. Globex (never seeded) and a clause genuinely absent from a real contract (force majeure in the Telstar agreement). |
+| `aggregation` | `expected_fail: true`. Counting / averaging / enumerating over the corpus — the top-5 budget drops records, and there is no arithmetic. |
+| `temporal` | `expected_fail: true`. "Active now", "expires in 6 months", "most recent" — no date arithmetic in the query path, and `status` in the index is stale (see Known Limitations above). |
+
+`aggregation` and `temporal` are both `expected_fail` — scored so the gap stays visible, but
+excluded from the headline so they don't mask a real regression elsewhere.
 
 `ground_truth_contexts` are written in the framed form the generator sees —
 `[docname] (status: …; supplier: …): text` — because some answers depend on payload metadata
@@ -338,43 +355,47 @@ judge for semantic comparison. The four metrics use the reference differently �
 
 Drop the ground truth and only the two reference-free metrics remain computable.
 
-### The refusal case
+### The refusal cases
 
-The Globex entry has `ground_truth_contexts: []`. RAGAS's answer/context metrics are meaningless for
-"correctly answered nothing," so `evaluate.py` scores it with a plain refusal-string match
-(`_is_refusal` → `refusal_handled` fraction) and excludes it from the RAGAS set. "Did it refuse" is
+`refusal` entries have `ground_truth_contexts: []`. RAGAS's answer/context metrics are meaningless
+for "correctly answered nothing," so `evaluate.py` scores them with a plain refusal-string match
+(`_is_refusal` → `refusal_handled` fraction) and keeps them out of the RAGAS set. "Did it refuse" is
 a discrete outcome — string matching is both correct and free here, the same reason
 `proj-ticket-rag` can use `ranx` rank-math for its retrieval-only eval.
 
+The absent-clause case (force majeure in the Telstar contract) is harder than Globex: retrieval
+*does* return relevant Telstar chunks, they just don't mention force majeure. In the baseline run
+the model still emitted the canonical refusal string here rather than fabricating a clause — both
+refusal cases passed. If a future change makes it answer "the provided terms don't mention force
+majeure" instead, `_is_refusal` will count that as a miss; that would be a signal to loosen the
+check, not necessarily a regression.
+
 ### Interpreting the numbers
 
-The baseline scores (faithfulness ~0.87, answer_relevancy ~0.95, context_recall ~0.96,
-context_precision ~0.87) are a **"pipeline isn't broken" signal, not a quality measurement.** The
-dataset is easy by construction:
+Baseline run (2026-08-27, `gpt-4o`, frozen in `results.baseline.json`) — headline over the 15
+non-`expected_fail` questions: faithfulness 0.85, answer_relevancy 0.93, context_recall 0.89,
+context_precision 0.91, refusal 2/2. By slice:
 
-- **The questions are the README showcase set** — hand-picked to demonstrate each component working.
-  A random sample of real user questions would score lower.
-- **The corpus is tiny** (~60 chunks). Hybrid search pulls the top 20 into the candidate pool —
-  roughly a third of everything — so `context_recall` near 1.0 is close to unavoidable and says
-  little about retrieval skill. (`proj-ticket-rag` hit the same ceiling: recall@20 ≈ 1.0 on a small
-  set.)
-- **Every question has a distinctive lexical anchor** ("Zuckerman Security", "Coastal Warehousing")
-  that BM25 matches instantly. No near-duplicate contracts compete. There are no hard negatives, no
-  low-lexical-overlap cases, no disambiguation between a supplier's multiple contracts.
-- **The `ground_truth_contexts` are near-verbatim from the ingested text**, so the reference-vs-
-  retrieved semantic match is close to trivial.
+| slice | n | what the numbers say |
+|---|---|---|
+| `showcase` | 6 | ~0.88 / 0.95 / 0.92 / 0.93 — high, but **easy by construction** (README questions, a distinctive supplier token each, near-verbatim ground truth, a ~60-chunk corpus where the top-20 pool holds a third of everything so `context_recall` near 1.0 is nearly free — `proj-ticket-rag` hit the same ceiling). A "not broken" signal, not a quality measurement. |
+| `disambiguation` | 4 | `context_precision` **1.00** — the reranker cites the right contract (current vs superseded, primary vs backup, live vs cancelled) every time. This is the slice a retrieval regression would break first. |
+| `precision-multi` | 2 | Answers list all matches correctly, but `context_precision` **0.50** — the top-5 pool carries irrelevant contracts. The known top-k limitation, made visible without the answer being wrong. |
+| `semantic-no-anchor` | 3 | `context_recall`/`context_precision` **1.00** with no lexical anchor — the dense side carries it. `faithfulness` 0.71 is LLM-judge strictness on one answer (manually verified grounded), not a hallucination; small-N noise. |
+| `aggregation` | 2 | `expected_fail`. Q "how many cancelled" found **2 of 3** (top-5 dropped the third). `context_recall` 0.33. |
+| `temporal` | 3 | `expected_fail`. The pipeline **refuses** "which are active now" / "expiring in 6 months" rather than fabricating dates — graceful, but scores ~0 on RAGAS. "Most recent Vertex contract" it got right by comparing `start_date` in the framed metadata. |
 
-Also:
+Caveats:
 
 - **Nondeterministic.** LLM-judge scores wobble ±0.03–0.05 run-to-run on identical inputs. Any CI
-  threshold (#49) must sit well below the baseline, not at it.
-- **Small N.** 6 scored questions — one question swings the mean ~0.16. Directional only; it cannot
-  separate close configurations (HyDE vs step-back).
-- **Costs OpenAI quota.** Generation + judge calls per run. `evaluate.yml` is disabled pending #49.
-
-A harder dataset — multiple contracts per supplier, near-miss distractors, paraphrased ground truth,
-aggregation queries, more refusal cases — is tracked in #102 and is the prerequisite for trusting
-these numbers or running an ablation.
+  threshold (#49) must sit well below the baseline, not at it, and should be set per `case_class`.
+- **Still smallish N.** 15 headline questions, 2–4 per slice. Directional; it will not cleanly
+  separate close configurations (HyDE vs step-back) — an ablation needs the slices deepened further.
+- **`expected_fail` is scored, not skipped.** `aggregation` + `temporal` land in
+  `expected_fail_metrics` (baseline: f 0.57 / cr 0.23 / cp 0.23, n=5) so the known limitations stay
+  measured without dragging the headline.
+- **Costs OpenAI quota.** Generation (`gpt-4o`) + judge (`gpt-4o-mini`) calls per run;
+  `results.json` records which generation model produced it. `evaluate.yml` is disabled pending #49.
 
 ## Testing Strategy
 

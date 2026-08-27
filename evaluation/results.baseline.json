@@ -1,49 +1,121 @@
 {
-  "note": "Frozen reference run \u2014 the honest baseline from #99, against the current demo data. These scores are a \"pipeline is not broken\" signal, NOT a quality measurement: the dataset is easy by construction (README showcase questions, ~60-chunk corpus so context_recall is near-unavoidable, distinctive supplier tokens, near-verbatim ground truth, N=6). RAGAS metrics are LLM-judged and drift +/-0.03-0.05 run-to-run. Regenerate deliberately (copy a clean evaluation/results.json here) only when the pipeline changes on purpose; evaluate.py always writes the live run to the gitignored evaluation/results.json, never this file. A harder dataset is tracked separately.",
-  "timestamp": "2026-08-27T08:15:45.841026+00:00",
+  "note": "Frozen reference run from #102 (22-question dataset, gpt-4o generation). RAGAS metrics are LLM-judged and drift +/-0.03-0.05 run-to-run; this is a point-in-time snapshot for #49 threshold calibration, not a spec. Headline covers the 15 non-expected_fail questions; metrics_by_case_class breaks it down; expected_fail_metrics holds the aggregation + temporal cases (known limitations, scored separately). Regenerate deliberately (copy a clean evaluation/results.json here) only when the pipeline changes on purpose; evaluate.py always writes the live run to the gitignored evaluation/results.json, never this file.",
+  "timestamp": "2026-08-27T09:28:34.194181+00:00",
   "dataset": "evaluation/test_dataset.json",
-  "num_questions": 7,
-  "num_scored": 6,
-  "num_refusal_cases": 1,
+  "model": "gpt-4o",
+  "num_questions": 22,
+  "num_headline": 15,
+  "num_scored": 20,
+  "num_refusal_cases": 2,
+  "num_expected_fail": 5,
   "metrics": {
-    "faithfulness": 0.875,
-    "answer_relevancy": 0.9554,
-    "context_recall": 0.9583,
-    "context_precision": 0.8713,
+    "faithfulness": 0.8471,
+    "answer_relevancy": 0.9313,
+    "context_recall": 0.8944,
+    "context_precision": 0.9059,
     "refusal_handled": 1.0
   },
+  "metrics_by_case_class": {
+    "aggregation": {
+      "faithfulness": 0.9286,
+      "answer_relevancy": 0.9422,
+      "context_recall": 0.3333,
+      "context_precision": 0.4021,
+      "n": 2
+    },
+    "disambiguation": {
+      "faithfulness": 0.9018,
+      "answer_relevancy": 0.8938,
+      "context_recall": 0.7917,
+      "context_precision": 1.0,
+      "n": 4
+    },
+    "precision-multi": {
+      "faithfulness": 0.8333,
+      "answer_relevancy": 0.9852,
+      "context_recall": 0.875,
+      "context_precision": 0.5,
+      "n": 2
+    },
+    "semantic-no-anchor": {
+      "faithfulness": 0.7111,
+      "answer_relevancy": 0.9079,
+      "context_recall": 1.0,
+      "context_precision": 1.0,
+      "n": 3
+    },
+    "showcase": {
+      "faithfulness": 0.8833,
+      "answer_relevancy": 0.95,
+      "context_recall": 0.9167,
+      "context_precision": 0.9315,
+      "n": 6
+    },
+    "temporal": {
+      "faithfulness": 0.3333,
+      "answer_relevancy": 0.3208,
+      "context_recall": 0.1667,
+      "context_precision": 0.1111,
+      "n": 3
+    }
+  },
+  "expected_fail_metrics": {
+    "faithfulness": 0.5714,
+    "answer_relevancy": 0.5694,
+    "context_recall": 0.2333,
+    "context_precision": 0.2275,
+    "n": 5
+  },
+  "refusal_results": [
+    {
+      "question": "What's our contract value with a supplier called Globex Corp?",
+      "case_class": "refusal",
+      "handled": true
+    },
+    {
+      "question": "What does our contract with Telstar Connectivity Ltd. say about force majeure?",
+      "case_class": "refusal",
+      "handled": true
+    }
+  ],
   "per_question": [
     {
+      "case_class": "showcase",
       "capability": "Hybrid search \u2014 exact term (BM25)",
       "question": "What penalty applies if Zuckerman Security Ltd. exceeds two service level incidents in a quarter?",
       "answer": "If Zuckerman Security Ltd. exceeds two service level incidents in a calendar quarter, a penalty equal to 5% of the quarterly invoice amount shall apply for each additional incident [CON-2026-00022].",
       "retrieved_context_count": 5
     },
     {
+      "case_class": "showcase",
       "capability": "Hybrid search \u2014 paraphrase (vector)",
       "question": "Which supplier bears the cost of replacing defective goods delivered under warranty?",
       "answer": "Alpha Supplies Ltd. bears the cost of replacing defective goods delivered under warranty, including shipping costs for the return and replacement [CON-2026-00026].",
       "retrieved_context_count": 5
     },
     {
+      "case_class": "showcase",
       "capability": "Cross-document synthesis (reranker)",
       "question": "Compare the payment terms across our contracts with Alpha Supplies Ltd. and Summit Traders Ltd.",
-      "answer": "The payment terms for the contracts with Alpha Supplies Ltd. and Summit Traders Ltd. are as follows:\n\n- For Alpha Supplies Ltd., the payment terms in the active contract (CON-2026-00026) are Net 30, meaning payment is due within 30 days of the invoice date [CON-2026-00026].\n\n- For Summit Traders Ltd., both the inactive addendum (CON-2026-00025) and the unsigned contract (CON-2026-00024) have payment terms of Net 45, meaning payment is due within 45 days of the invoice date [CON-2026-00025] [CON-2026-00024].",
+      "answer": "The payment terms for the contracts with Alpha Supplies Ltd. and Summit Traders Ltd. are as follows:\n\n- For Alpha Supplies Ltd., the current active contract (CON-2026-00026) specifies that payment is due within 30 days of the invoice date (Net 30) [CON-2026-00026]. The prior inactive contract (CON-2026-00027) also had Net 30 payment terms [CON-2026-00027].\n\n- For Summit Traders Ltd., both the unsigned contract (CON-2026-00024) and the inactive addendum (CON-2026-00025) specify that payment is due within 45 days of the invoice date (Net 45) [CON-2026-00024] [CON-2026-00025].",
       "retrieved_context_count": 5
     },
     {
+      "case_class": "showcase",
       "capability": "HyDE query rewriting (abstract question)",
       "question": "What recourse do we have if a security services vendor doesn't perform to the agreed standard?",
       "answer": "If a security services vendor, such as Zuckerman Security Ltd., does not perform to the agreed standard, there are a couple of recourses available according to the contract [CON-2026-00022]:\n\n1. **Service Level Agreement Penalty**: If Zuckerman Security Ltd. exceeds the maximum of two service level incidents per calendar quarter, a penalty equal to 5% of the quarterly invoice amount shall apply for each additional incident.\n\n2. **Termination for Cause**: Either party may terminate the agreement for cause upon written notice, subject to a fifteen (15) day cure period during which the breaching party may remedy the default.",
       "retrieved_context_count": 5
     },
     {
+      "case_class": "showcase",
       "capability": "Plain-language \u2194 exact-value interpretation",
       "question": "Has our contract with Zuckerman Security Ltd. been signed yet?",
-      "answer": "No, the contracts with Zuckerman Security Ltd. have not been signed. One contract is in \"Cancelled\" status [CON-2026-00023], and the other is in \"Unsigned\" status [CON-2026-00022].",
+      "answer": "No, the contract with Zuckerman Security Ltd. has not been signed. The status of the contract [CON-2026-00022] is \"Unsigned\" [CON-2026-00022]. Additionally, the agreement [CON-2026-00023] was mutually terminated prior to signature [CON-2026-00023].",
       "retrieved_context_count": 5
     },
     {
+      "case_class": "refusal",
       "capability": "Grounded refusal (no hallucination)",
       "question": "What's our contract value with a supplier called Globex Corp?",
       "answer": "I could not find relevant information in the contract documents.",
@@ -52,10 +124,123 @@
       "refusal_handled": true
     },
     {
+      "case_class": "showcase",
       "capability": "PDF ingestion",
       "question": "What is Zuckerman Security Ltd.'s liability cap under the attached contract PDF, and how quickly can either party terminate for cause?",
       "answer": "Zuckerman Security Ltd.'s liability cap under the contract is the total aggregate liability of either party arising under the agreement, which shall not exceed an amount equal to twelve (12) months' fees paid under the contract [CON-2026-00022]. Either party may terminate the agreement for cause upon written notice, subject to a fifteen (15) day cure period during which the breaching party may remedy the default [CON-2026-00022].",
       "retrieved_context_count": 5
+    },
+    {
+      "case_class": "disambiguation",
+      "capability": "Multi-contract supplier \u2014 current vs superseded",
+      "question": "What warranty does Alpha Supplies Ltd. give on goods under our current packaging agreement?",
+      "answer": "Alpha Supplies Ltd. warrants all delivered goods against defects for a period of 90 days under the current packaging agreement [CON-2026-00026]. Defective goods shall be replaced at Alpha's expense, including shipping costs for the return and replacement [CON-2026-00026].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "disambiguation",
+      "capability": "Multi-contract supplier \u2014 primary vs backup",
+      "question": "Which of our Telstar Connectivity contracts is the primary network agreement, and which was the backup line?",
+      "answer": "The primary network agreement is covered under contract [CON-2026-00039], which is active and covers primary internet and WAN connectivity across all buyer office locations with Telstar Connectivity Ltd. [CON-2026-00039]. The backup line was covered under contract [CON-2026-00040], which is inactive and was for a secondary backup connectivity line from Telstar Connectivity Ltd. at the buyer's headquarters [CON-2026-00040].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "disambiguation",
+      "capability": "Multi-contract supplier \u2014 which agreement covers a clause",
+      "question": "Under which Vertex Hardware Systems agreement do we get next-business-day on-site repair?",
+      "answer": "The next-business-day on-site repair is covered under the addendum in contract [CON-2026-00030] with Vertex Hardware Systems Ltd. [CON-2026-00030].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "disambiguation",
+      "capability": "Multi-contract supplier \u2014 active vs cancelled + PDF",
+      "question": "What are the emergency and routine response times in our facilities maintenance contract with Ashford?",
+      "answer": "The emergency response time in the facilities maintenance contract with Ashford Facilities Management Ltd. is within 4 hours of report, 24 hours a day, seven days a week. Routine maintenance requests are actioned within 2 business days of submission via the buyer's facilities ticketing system [CON-2026-00032].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "precision-multi",
+      "capability": "Retrieve all-and-only matching contracts",
+      "question": "Which suppliers are on Net 30 payment terms?",
+      "answer": "The suppliers on Net 30 payment terms are:\n\n1. Alpha Supplies Ltd. for the supply of corrugated packaging materials and custom cartons [CON-2026-00026].\n2. Harvest Catering Supplies Ltd. for weekly delivery of office catering supplies and pantry stock [CON-2026-00048].\n3. Pristine Commercial Cleaning Co. for daily commercial cleaning services [CON-2026-00037].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "precision-multi",
+      "capability": "Retrieve all-and-only matching contracts",
+      "question": "Which of our contracts require the supplier to delete our data after the contract ends?",
+      "answer": "The contracts that require the supplier to delete your data after the contract ends are:\n\n1. The contract with Quantum Data Analytics Inc. (CON-2026-00050), which states that upon termination of the agreement, Quantum shall permanently delete all buyer data from its systems within thirty (30) days and shall certify deletion in writing upon request [CON-2026-00050].\n\n2. The contract with Nimbus Cloud Solutions Inc. (CON-2026-00028), which specifies that all buyer data is deleted within 30 days of contract termination [CON-2026-00028].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "semantic-no-anchor",
+      "capability": "No supplier name in the question",
+      "question": "If we stop using one of our cloud analytics platforms, what happens to the data we have put into it?",
+      "answer": "If you stop using the Nimbus Cloud Solutions Inc.'s platform, all buyer data is stored exclusively in EU-based data centers and is deleted within 30 days of contract termination [CON-2026-00028]. For Quantum Data Analytics Inc.'s platform, upon termination of the agreement, Quantum shall permanently delete all buyer data from its systems [CON-2026-00050].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "semantic-no-anchor",
+      "capability": "No supplier name in the question",
+      "question": "What safeguard do we have if a vendor keeps exceeding its allowed number of service incidents?",
+      "answer": "If a vendor exceeds its allowed number of service incidents, specifically in the context of the Master Services Agreement with Zuckerman Security Ltd., there is a safeguard in place where a penalty is applied. The agreement states that Zuckerman shall maintain a maximum of two service level incidents per calendar quarter. If this threshold is exceeded, a penalty equal to 5% of the quarterly invoice amount shall apply for each additional incident [CON-2026-00022].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "semantic-no-anchor",
+      "capability": "No supplier name in the question",
+      "question": "Do any of our agreements put a ceiling on a supplier's total financial liability, and how is it set?",
+      "answer": "Yes, there are agreements that put a ceiling on a supplier's total financial liability:\n\n1. The agreement with Zuckerman Security Ltd. includes a liability cap where the total aggregate liability of either party arising under the agreement shall not exceed an amount equal to twelve (12) months' fees paid under the contract [CON-2026-00022].\n\n2. The agreement with Coastal Warehousing & Logistics Ltd. caps the supplier's liability for loss or damage to stored goods at the declared value of the goods or $50,000 per incident, whichever is lower [CON-2026-00035]. This is consistent with the general liability terms for warehousing and logistics services [Warehousing & Logistics - Liability Terms].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "refusal",
+      "capability": "Specific clause absent from a real contract",
+      "question": "What does our contract with Telstar Connectivity Ltd. say about force majeure?",
+      "answer": "I could not find relevant information in the contract documents.",
+      "retrieved_context_count": 5,
+      "refusal_case": true,
+      "refusal_handled": true
+    },
+    {
+      "case_class": "aggregation",
+      "capability": "Count + enumerate across the corpus (known limitation)",
+      "question": "How many of our contracts have been cancelled, and which ones?",
+      "answer": "Two contracts have been cancelled:\n\n1. Contract [CON-2026-00033] with Ashford Facilities Management Ltd. [CON-2026-00033].\n2. Contract [CON-2026-00044] with Ironclad Equipment Leasing Co. [CON-2026-00044].",
+      "retrieved_context_count": 5,
+      "expected_fail": true
+    },
+    {
+      "case_class": "aggregation",
+      "capability": "Enumerate + compute across the corpus (known limitation)",
+      "question": "What is the average payment-term length across all our supplier contracts?",
+      "answer": "The payment terms across the supplier contracts are as follows:\n\n1. [Standard Purchase Terms - Net 30]: Payment is due within 30 days of invoice date [Standard Purchase Terms - Net 30].\n2. [CON-2026-00025]: Payment is due within 45 days of invoice date (Net 45) [CON-2026-00025].\n3. [CON-2026-00024]: Payment is due within 45 days of invoice date (Net 45) [CON-2026-00024].\n4. [CON-2026-00048]: Payment is due within 30 days of invoice date (Net 30) [CON-2026-00048].\n\nTo calculate the average payment-term length:\n- Net 30 appears twice.\n- Net 45 appears twice.\n\nAverage = (30 + 45 + 45 + 30) / 4 = 37.5 days\n\nThe average payment-term length across all supplier contracts is 37.5 days.",
+      "retrieved_context_count": 5,
+      "expected_fail": true
+    },
+    {
+      "case_class": "temporal",
+      "capability": "Date-range filter against the current date (known limitation)",
+      "question": "Which of our contracts expire within the next six months?",
+      "answer": "I could not find relevant information in the contract documents.",
+      "retrieved_context_count": 5,
+      "expected_fail": true
+    },
+    {
+      "case_class": "temporal",
+      "capability": "Enumerate on a stale, run-date-dependent status (known limitation)",
+      "question": "Which of our contracts are currently active?",
+      "answer": "I could not find relevant information in the contract documents.",
+      "retrieved_context_count": 5,
+      "expected_fail": true
+    },
+    {
+      "case_class": "temporal",
+      "capability": "Order by date to resolve 'most recent' (known limitation)",
+      "question": "What is our most recent contract with Vertex Hardware Systems Ltd.?",
+      "answer": "The most recent contract with Vertex Hardware Systems Ltd. is [CON-2026-00030], which is active and has a start date of July 1, 2026, and an end date of June 30, 2027. This contract is an addendum that adds an extended support and maintenance plan covering the laptop fleet purchased under the prior procurement agreement, including next-business-day on-site repair. [CON-2026-00030]",
+      "retrieved_context_count": 5,
+      "expected_fail": true
     }
   ]
 }
