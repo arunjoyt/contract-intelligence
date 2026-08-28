@@ -91,6 +91,13 @@ def client(monkeypatch, mock_pipeline):
     monkeypatch.setenv("ERPNEXT_OAUTH_CLIENT_SECRET", "test-client-secret")
     monkeypatch.setenv("OAUTH_REDIRECT_URI", "http://localhost:8000/auth/callback")
     monkeypatch.setenv("FRONTEND_URL", "http://localhost:8501")
+    # api.main calls load_dotenv() at import, so a developer's real .env leaks
+    # LANGFUSE_* into os.environ. Without this, the lifespan builds a real
+    # Langfuse client and tests emit real traces to a local Langfuse instance
+    # (CI has no .env so it never saw this). Force tracing off.
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_HOST", raising=False)
 
     monkeypatch.setattr("api.main.Embedder", MagicMock)
     monkeypatch.setattr("api.main.VectorStore", lambda: mock_vs)
@@ -300,6 +307,19 @@ def test_ingest_full_with_correct_secret_returns_202(client):
     assert resp.json() == {"status": "accepted"}
 
 
+def test_ingest_full_returns_409_when_a_run_is_in_flight(client):
+    """A second /ingest/full while one holds the lock is rejected, not queued
+    (issue #125)."""
+
+    class _Locked:
+        def locked(self) -> bool:
+            return True
+
+    client.app.state.ingest_lock = _Locked()
+    resp = client.post("/ingest/full", headers={"X-Admin-Secret": ADMIN_SECRET})
+    assert resp.status_code == 409
+
+
 # ---------------------------------------------------------------------------
 # Full-ingest Langfuse tracing (issue #123)
 # ---------------------------------------------------------------------------
@@ -360,11 +380,76 @@ async def test_run_full_ingest_traces_listing_failure(monkeypatch):
 
     await _run_full_ingest(MagicMock(), MagicMock(), MagicMock(), lf)
 
-    # every listing failed -> a per-doctype ERROR span, and a 0/0 run output
+    # every listing failed -> a per-doctype ERROR span, and an error-flagged 0/0 output
     trace.span.return_value.end.assert_any_call(level="ERROR")
     trace.update.assert_called_once_with(
-        output={"documents_indexed": 0, "chunks_indexed": 0}
+        output={
+            "documents_indexed": 0,
+            "chunks_indexed": 0,
+            "status": "error",
+            "failed_listings": ["Contract", "Terms and Conditions"],
+        }
     )
+
+
+async def test_run_full_ingest_flags_zero_indexed_as_error(monkeypatch):
+    """The #125 bug shape: get_list returns [] (no exception) for every doctype.
+    The run must not report a clean 'complete' -- output carries status=error."""
+    from api.main import _run_full_ingest
+
+    ec = AsyncMock()
+    ec.__aenter__.return_value = ec
+    ec.__aexit__.return_value = None
+    ec.get_list.return_value = []
+    monkeypatch.setattr("api.main.ERPNextClient", lambda: ec)
+
+    lf = MagicMock()
+    trace = lf.trace.return_value
+
+    await _run_full_ingest(MagicMock(), MagicMock(), MagicMock(), lf)
+
+    trace.update.assert_called_once_with(
+        output={"documents_indexed": 0, "chunks_indexed": 0, "status": "error"}
+    )
+
+
+async def test_run_full_ingest_skips_when_lock_already_held():
+    import asyncio
+
+    from api.main import _run_full_ingest
+
+    lock = asyncio.Lock()
+    await lock.acquire()
+    lf = MagicMock()
+
+    await _run_full_ingest(MagicMock(), MagicMock(), MagicMock(), lf, lock)
+
+    lf.trace.assert_not_called()  # duplicate run skipped, nothing traced
+
+
+async def test_run_full_ingest_holds_lock_for_the_duration(monkeypatch):
+    import asyncio
+
+    from api.main import _run_full_ingest
+
+    lock = asyncio.Lock()
+    seen = {}
+
+    ec = AsyncMock()
+    ec.__aenter__.return_value = ec
+    ec.__aexit__.return_value = None
+
+    def _list(*_a, **_k):
+        seen["locked_during_run"] = lock.locked()
+        return []
+
+    ec.get_list.side_effect = _list
+    monkeypatch.setattr("api.main.ERPNextClient", lambda: ec)
+
+    await _run_full_ingest(MagicMock(), MagicMock(), MagicMock(), None, lock)
+
+    assert seen["locked_during_run"] is True
+    assert lock.locked() is False  # released on exit
 
 
 async def test_run_full_ingest_without_langfuse_still_indexes(monkeypatch):
