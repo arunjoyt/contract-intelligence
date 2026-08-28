@@ -410,10 +410,6 @@ judge score on ~17 questions is too noisy to gate on.
 
 ## Known limitations — disclose to the client team
 
-- **Post-submit edits.** Frappe 15 does not reliably fire `on_update_after_submit` via API or
-  desk save. Verified against Purchase Order (out of scope); re-verify against Contract before
-  assuming the gap applies. `on_update` covers desk saves of non-amended Contracts. Workaround:
-  periodic `POST /ingest/full`.
 - **Role changes lag by up to 8h.** Roles are baked into the JWT at login; a revoked role still
   works until the token expires.
 - **Metadata filters are keyword-only.** Doctype and status only — no date-range parsing, no LLM

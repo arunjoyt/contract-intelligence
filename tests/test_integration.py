@@ -1022,8 +1022,11 @@ def test_erpnext_contract_cancel_fires_webhook_and_updates_qdrant(api_http) -> N
         pass
 
 
-# FUTURE ENHANCEMENT: on_update_after_submit re-indexing is not currently
-# supported and has no automated or manual test.
+# FUTURE ENHANCEMENT: on_update_after_submit re-indexing for Purchase Order is
+# not currently supported and has no automated or manual test. (Contract's
+# equivalent gap was root-caused and fixed 2026-08-28 -- see #96 and
+# docs/DEPLOYMENT.md § Future Enhancements -- but PO is out of scope/descoped
+# and was not re-tested against the fix.)
 #
 # Investigation confirmed that Frappe 15 does not fire the on_update_after_submit
 # webhook for Purchase Orders under any tested trigger — neither via REST API
@@ -1032,9 +1035,11 @@ def test_erpnext_contract_cancel_fires_webhook_and_updates_qdrant(api_http) -> N
 # across all attempts.
 #
 # The po-on-update-submitted webhook has been removed from the ERPNext
-# configuration (see docs/DEPLOYMENT.md § Future Enhancements).  If Frappe adds
-# reliable support for this event in a future release, re-instate the webhook
-# and add an E2E test here.
+# configuration (see docs/DEPLOYMENT.md § Future Enhancements). If PO ingestion
+# ever comes back into scope, re-verify against the current frappe version
+# before assuming this gap still applies -- it may already be fixed the same
+# way Contract's was (#96): re-register the webhook for on_update_after_submit
+# specifically (not on_update), then re-instate an E2E test here.
 
 
 @live

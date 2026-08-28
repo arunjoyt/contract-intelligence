@@ -172,7 +172,9 @@ Point ID is deterministic: `uuid5(NAMESPACE_DNS, f"{docname}:{chunk_index}")`. T
 
 ### Incremental indexing (webhooks)
 
-ERPNext fires webhooks on `on_submit`/`on_update`/`on_cancel` for `Contract` and `Terms and Conditions`.
+ERPNext fires webhooks on `on_submit`/`on_update`/`on_update_after_submit`/`on_cancel` for `Contract`
+and `Terms and Conditions` (`on_update_after_submit` covers `allow_on_submit` field edits, e.g.
+`is_signed`, made after submit — see `docs/DEPLOYMENT.md` § Future Enhancements for the fix history).
 The handler: verify `X-Frappe-Webhook-Signature`
 (HMAC-SHA256) → fetch full doc via `ERPNextClient` → `delete_by_docname` → re-run parse → chunk → embed →
 upsert → rebuild BM25 index. No full re-index is needed for routine updates.
