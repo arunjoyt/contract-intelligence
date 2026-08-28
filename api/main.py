@@ -30,6 +30,7 @@ from api.auth.dependencies import require_allowed_role
 from api.routers.auth import router as auth_router
 from ingestion.embedder import Embedder
 from ingestion.erpnext_client import ERPNextClient
+from ingestion.tracing import span, traced_embed
 from ingestion.webhook_handler import (
     gather_chunks_for_doc,
     handle_webhook_request,
@@ -98,6 +99,7 @@ async def _lifespan(app: FastAPI):
     app.state.vector_store = vector_store
     app.state.hybrid_search = hybrid_search
     app.state.pipeline = pipeline
+    app.state.langfuse = lf
     app.state.erpnext_client = erpnext_client
     app.state.webhook_secret = webhook_secret
     app.state.oauth_state: dict[str, str] = {}
@@ -162,6 +164,7 @@ def ingest_full(
         app.state.embedder,
         app.state.vector_store,
         app.state.hybrid_search,
+        app.state.langfuse,
     )
     return {"status": "accepted"}
 
@@ -177,6 +180,7 @@ async def webhook_erpnext(request: Request) -> dict[str, str]:
             app.state.vector_store.get_all_texts()
         ),
         webhook_secret=app.state.webhook_secret,
+        langfuse=app.state.langfuse,
     )
 
 
@@ -189,12 +193,23 @@ async def _run_full_ingest(
     embedder: Embedder,
     vector_store: VectorStore,
     hybrid_search: HybridSearch,
+    langfuse: Any | None = None,
 ) -> None:
     logger.info("Full ingest started")
+    trace = langfuse.trace(name="full_ingest") if langfuse else None
+    docs_indexed = 0
+    chunks_indexed = 0
+
     async with ERPNextClient() as client:
         for doctype in _INGEST_DOCTYPES:
+            # Traced (not just logged) so a run that indexes nothing because the
+            # ERPNext listing failed shows *why* in the trace, not just a 0/0
+            # output with no observations.
             try:
-                doc_list = await client.get_list(doctype, limit=0)
+                with span(trace, f"list:{doctype}") as list_span:
+                    doc_list = await client.get_list(doctype, limit=0)
+                    if list_span:
+                        list_span.update(output={"count": len(doc_list)})
             except Exception:
                 logger.exception("Failed to list %s", doctype)
                 continue
@@ -203,26 +218,35 @@ async def _run_full_ingest(
             for entry in doc_list:
                 name: str = entry["name"]
                 try:
-                    doc = await client.get_doc(doctype, name)
-                    supplier_group = await resolve_supplier_group(doctype, doc, client)
+                    with span(trace, f"{doctype}:{name}"):
+                        doc = await client.get_doc(doctype, name)
+                        supplier_group = await resolve_supplier_group(doctype, doc, client)
 
-                    text, metadata, force_single = prepare_doc_for_indexing(
-                        doctype, doc, supplier_group
-                    )
-                    chunks = await gather_chunks_for_doc(doctype, doc, text, force_single, client)
-                    if not chunks:
-                        continue
+                        text, metadata, force_single = prepare_doc_for_indexing(
+                            doctype, doc, supplier_group
+                        )
+                        chunks = await gather_chunks_for_doc(
+                            doctype, doc, text, force_single, client
+                        )
+                        if not chunks:
+                            continue
 
-                    vectors = embedder.embed_texts([c["text"] for c in chunks])
-                    enriched = [
-                        {**chunk, **metadata, "vector": vector}
-                        for chunk, vector in zip(chunks, vectors, strict=True)
-                    ]
-                    vector_store.upsert_chunks(enriched)
+                        vectors = traced_embed(trace, embedder, [c["text"] for c in chunks])
+                        enriched = [
+                            {**chunk, **metadata, "vector": vector}
+                            for chunk, vector in zip(chunks, vectors, strict=True)
+                        ]
+                        vector_store.upsert_chunks(enriched)
+                        docs_indexed += 1
+                        chunks_indexed += len(chunks)
                 except Exception:
                     logger.exception("Failed to ingest %s %s", doctype, name)
 
     hybrid_search.build_bm25_index(vector_store.get_all_texts())
+    if trace:
+        trace.update(
+            output={"documents_indexed": docs_indexed, "chunks_indexed": chunks_indexed}
+        )
     logger.info("Full ingest complete")
 
 

@@ -949,6 +949,11 @@ the `on_update_after_submit` webhook for PO before it was descoped. If PO ingest
 into scope, re-verify against the current frappe version before assuming the same gap still applies —
 it may already be fixed the same way Contract's was.
 
+**Follow-up (#123):** diagnosing this meant cross-referencing Frappe's Webhook Request Log with the
+raw app log by hand — the webhook re-index path had no Langfuse instrumentation. It now emits a
+`webhook_reindex` trace per call (`fetch` → `parse` → `chunk` → `embed` → `upsert`), so a future
+re-index failure is one trace to open. See `docs/ARCHITECTURE.md` § Observability → Ingestion traces.
+
 ### Mesh VPN (Tailscale) for team-wide Langfuse/Qdrant access
 
 **Status:** Not implemented — SSH tunnel (see §12) covers the immediate need.
