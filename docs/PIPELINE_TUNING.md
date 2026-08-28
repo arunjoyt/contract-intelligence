@@ -7,7 +7,10 @@ per-`case_class` slicing) exists as of #102, but the dataset is still 2–4 ques
 per slice — too small to move a knob without fitting to noise.
 
 This doc walks the whole pipeline order: ingest → embed → rewrite → retrieve →
-rerank → generate.
+rerank → generate. It describes the **one-time** tuning pass on the reference
+corpus (the demo data) — issue #113. Per-client work is a lighter validation
+pass, not a re-run; see [Per-client tuning](#per-client-tuning--tune-once-validate-per-client)
+below and #127.
 
 ## The knobs
 
@@ -193,6 +196,55 @@ Likely conclusions:
   fewer are needed. A thorough pass sweeps `chunk_size × top_n` as a small grid
   rather than fixing one.
 
+## Per-client tuning — tune once, validate per client
+
+Everything above is the **one-time** pass on the reference corpus (#113): it
+produces the shipped defaults in `config.py` / `pipeline/constants.py` and the
+baseline thresholds. It is **not** re-run for every client. Per-client work is a
+lighter validation pass (#127) — a small generated + spot-checked eval set on the
+client's corpus, checked against the reference thresholds, with a targeted
+single-knob nudge only when a `case_class` slice fails.
+
+### Which knobs are corpus-dependent
+
+| Knob | Per client? | Why |
+|---|---|---|
+| `chunk_size` / `chunk_overlap` | No | driven by document *structure* (contract / T&C clause length), ~uniform across procurement clients |
+| `EMBEDDING_MODEL` | No | global product decision (#101 / #90) |
+| `QUERY_REWRITE_STRATEGY` + HyDE params | No | depends on question *intent*, not the corpus — and Step A may make it an adaptive classifier anyway |
+| RRF `k` | No | fusion constant, insensitive over wide ranges |
+| `RETRIEVAL_TOP_K` | **Weakly** | recall knee shifts with corpus **size** and **homogeneity** (more docs / more boilerplate → gold chunk buried deeper). A bigger pool costs reranker compute only, not generation — so a generous default (20–30) absorbs most clients; revisit only for a genuinely large or homogeneous corpus |
+| `RERANKER_MODEL` | No | global quality / latency choice |
+| `RERANK_TOP_N` | **Weakly** | sensitive to the client's *question style* (single-clause lookup vs cross-document synthesis), not their contracts |
+| `OPENAI_MODEL` | No | global |
+| answer system prompt | Mostly no | may get light per-client *vocabulary* edits ("agreements" not "contracts", client-specific status terms) — localization, not tuning |
+
+Not knobs, but genuinely per-client — and set from knowing the client's ERPNext,
+not from an eval sweep:
+
+- **Metadata filter vocabulary** — `_DOCTYPE_KEYWORDS` / `_STATUS_KEYWORDS` in
+  `pipeline/query_pipeline.py`, if the client uses custom doctypes or status
+  values. Config.
+- **Ingestion field mapping** — whether the client's custom fields / doctypes are
+  wired into `ingestion/`. An ingestion problem, not tuning.
+
+### Reach order when a per-client slice fails
+
+Per-client validation is mostly a pass / confirm exercise — the defaults are
+expected to hold. When a `case_class` slice comes in below the reference
+threshold, adjust in this order and stop as soon as the slice recovers:
+
+1. **`RETRIEVAL_TOP_K`** — raise it (e.g. 20 → 30 → 50) and re-check `recall@k`
+   into the pool for the failing slice. Cheapest fix, deterministic, no judge.
+2. **System prompt** — client-vocabulary or grounding edits, if the failure is
+   citation format / refusal / terminology rather than retrieval.
+3. **`RERANK_TOP_N`** — only if the failure is context *recall* on
+   multi-document questions and step 1 did not fix it.
+
+A full Step A–E sweep per client is almost never warranted; if one looks
+necessary, the client's corpus differs from the reference enough that #113 itself
+should be re-examined.
+
 ## Related
 
 - `docs/ARCHITECTURE.md` § Evaluation — the harness and `case_class` slices
@@ -201,6 +253,9 @@ Likely conclusions:
 - `config.py`, `pipeline/constants.py` — where the knobs live
 - `docs/MODEL_PROVIDER_SWAP.md` — swapping `OPENAI_MODEL` / `EMBEDDING_MODEL` provider
 - #102 — the harder eval dataset (prerequisite); its follow-up is the ~150-question set
+- #112 — build the reference tuning set + candidate generator (prerequisite for #113)
+- #113 — the one-time reference-corpus tuning pass this doc describes
+- #127 — the per-client validation workflow (uses #113's defaults + thresholds)
 - #101 / #90 — local embedding model / provider-agnostic model seam
 - #49 — CI threshold gating, which also wants per-`case_class` numbers
 - #45 — the enumeration investigation, closed as out of scope
