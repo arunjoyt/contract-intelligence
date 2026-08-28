@@ -346,10 +346,11 @@ locally with mkcert certs.
 ## Step 17 — `tests/e2e/` — ERPNext Desk E2E Test Suite (Playwright)
 
 **Status: implemented, consolidated, and executed live** (2026-07-23, `RUN_E2E=1` against this
-project's dev ERPNext site, with `playwright install chromium`). Result: **10 passed, 1 xfailed
-(confirmed platform limitation, not a bug), 0 failed** across 11 tests in 4 files — see below. Two
-real, previously-unknown findings surfaced purely from actually running this against live
-infrastructure, not from writing the tests; the first has since been fixed:
+project's dev ERPNext site, with `playwright install chromium`). Result at the time: **10 passed, 1
+xfailed (confirmed platform limitation, not a bug), 0 failed** across 11 tests in 4 files — see
+below. Two real, previously-unknown findings surfaced purely from actually running this against
+live infrastructure, not from writing the tests; both have since been fixed (as of 2026-08-28, #96,
+current live result: **11 passed, 0 xfailed, 0 failed**):
 
 1. **Missing webhook — fixed.** `test_webhook_config.py::test_all_required_webhooks_exist`
    failed for real: the `terms-on-update` webhook record (required per `docs/DEPLOYMENT.md`'s
@@ -362,17 +363,22 @@ infrastructure, not from writing the tests; the first has since been fixed:
    (`po-on-submit`, `po-on-cancel`, `po-on-update-submitted`, `scorecard-on-update`) still exist;
    harmless (`SUPPORTED_DOCTYPES` ignores them) but not yet cleaned up — a separate, optional
    follow-up.
-2. **Confirmed platform gap, now on Contract too — not fixable directly.** `on_update` does not
+2. **Confirmed platform gap, now on Contract too — fixed 2026-08-28 (#96).** `on_update` does not
    fire for a Desk "Update" action on an already-submitted Contract — confirmed conclusively via
    Frappe's own **Webhook Request Log** doctype showing zero delivery attempts for that action
    window (not a failed delivery, one never attempted). This was previously only verified against
    Purchase Order (`on_update_after_submit`, before PO left scope); now confirmed for Contract's
-   plain `on_update` too. This is a Frappe 15 platform limitation, not something fixable in this
-   codebase — see `docs/DEPLOYMENT.md` § Future Enhancements for full detail and possible
-   workarounds (e.g. a scheduled reconciliation job), not yet built.
-   `test_erpnext_desk_update_after_submit.py`'s first test is marked `xfail(strict=True)`
-   documenting this — `strict=True` means if a future Frappe version starts firing the webhook,
-   the test flips to an XPASS *failure*, so the fix gets noticed rather than silently masked.
+   plain `on_update` too. Root cause: such an edit fires `on_update_after_submit`, not `on_update`
+   — the registered webhook was the wrong event, and Frappe's webhook dispatcher separately
+   hardcoded an event allow-list that omitted `on_update_after_submit` (fixed upstream, present in
+   this bench's installed frappe 16.30.0). Fixed by registering a
+   `contract-on-update-after-submit` webhook — see `docs/DEPLOYMENT.md` § Future Enhancements →
+   "Post-submit edits are now re-indexed" for full detail, including an unrelated regression this
+   surfaced (webhook secrets broken by the b2→b3 bench migration).
+   `test_erpnext_desk_update_after_submit.py`'s first test was marked `xfail(strict=True)`
+   documenting the gap — `strict=True` meant that once the fix landed, the test would flip to an
+   XPASS *failure* instead of silently staying green, so it would get noticed; that's exactly what
+   happened, and the `xfail` marker has been removed now that both tests genuinely pass.
 
 End-to-end tests that drive the **ERPNext Desk UI and the real Streamlit UI in a real Chromium
 browser** to catch webhook-triggering and content-freshness bugs that REST-API integration tests
@@ -397,9 +403,10 @@ stay intentionally separate from this pattern:
 - `test_webhook_config.py` — a static config check with no ERPNext data and nothing to loop
   through the UI.
 - `test_erpnext_desk_update_after_submit.py` — relies on precise checks (Frappe's Webhook
-  Request Log, exact Qdrant payload values) to conclusively prove the confirmed platform gap
-  above; routing that through an LLM-composed UI answer would trade the precision that caught
-  the gap for flakiness, on the one test where precision is the entire point.
+  Request Log, exact Qdrant payload values) to conclusively prove the platform gap above (and,
+  since 2026-08-28, the fix — #96); routing that through an LLM-composed UI answer would trade
+  the precision that caught the gap for flakiness, on the one test where precision is the entire
+  point.
 
 Each full-loop test plants a distinctive, made-up fact (a random tracking code that can't
 already exist anywhere in the corpus) **in the chunk text itself**, not just the docname — found
@@ -433,7 +440,7 @@ tests/e2e/
 | File | Tests | What it catches | Live result |
 |---|---|---|---|
 | `test_webhook_config.py` | 5 (REST, no browser) | Missing / misconfigured webhook records | 5 passed (fixed: created the missing `terms-on-update` record) |
-| `test_erpnext_desk_update_after_submit.py` | 2 | `on_update` not firing on a post-submit Desk save | 1 xfailed (confirmed gap), 1 passed (repeated saves stay inert, no corruption) |
+| `test_erpnext_desk_update_after_submit.py` | 2 | `on_update_after_submit` (re-)indexing on a post-submit Desk save | 2 passed (fixed 2026-08-28, #96 — was 1 xfailed, 1 passed) |
 | `test_erpnext_to_streamlit_loop.py` | 3 | Content created/changed via Desk (submit, submit+PDF, cancel) not reaching the real Streamlit UI | 3 passed |
 | `test_streamlit_sidebar_filters.py` | 1 | Sidebar filter widgets breaking the query flow | 1 passed |
 

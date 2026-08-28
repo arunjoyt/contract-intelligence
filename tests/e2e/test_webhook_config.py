@@ -24,6 +24,7 @@ live = pytest.mark.skipif(not _run, reason="set RUN_E2E=1 to run")
 REQUIRED_WEBHOOKS = {
     "contract-on-submit": ("Contract", "on_submit"),
     "contract-on-update": ("Contract", "on_update"),
+    "contract-on-update-after-submit": ("Contract", "on_update_after_submit"),
     "contract-on-cancel": ("Contract", "on_cancel"),
     "terms-on-update": ("Terms and Conditions", "on_update"),
 }

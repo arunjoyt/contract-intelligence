@@ -316,21 +316,21 @@ Create the following Webhook records in ERPNext desk (or via the REST API). For 
   The handler reads `docname` directly from the JSON body, so this maps straight through with
   no extra field-mapping step needed.
 
-| Webhook Name              | Doctype             | Event       | Why                                               |
-|---------------------------|---------------------|-------------|----------------------------------------------------|
-| `contract-on-submit`      | Contract            | `on_submit` | Index contracts (and attached PDFs) when submitted |
-| `contract-on-update`      | Contract            | `on_update` | Re-index contracts saved/modified                  |
-| `contract-on-cancel`      | Contract            | `on_cancel` | Re-index with status=Cancelled when cancelled      |
-| `terms-on-update`         | Terms and Conditions| `on_update` | Not submittable; update only                       |
+| Webhook Name                       | Doctype             | Event                    | Why                                               |
+|-------------------------------------|---------------------|--------------------------|----------------------------------------------------|
+| `contract-on-submit`               | Contract            | `on_submit`              | Index contracts (and attached PDFs) when submitted |
+| `contract-on-update`               | Contract            | `on_update`              | Re-index contracts saved/modified (draft edits)    |
+| `contract-on-update-after-submit`  | Contract            | `on_update_after_submit` | Re-index `allow_on_submit` edits (e.g. `is_signed`) on an already-submitted contract |
+| `contract-on-cancel`               | Contract            | `on_cancel`              | Re-index with status=Cancelled when cancelled      |
+| `terms-on-update`                  | Terms and Conditions| `on_update`              | Not submittable; update only                       |
 
 > **Note:** `on_submit` is not valid for Terms and Conditions — it is not a submittable doctype in ERPNext.
 
-> **Note:** `on_update_after_submit` is **not configured** for any doctype here. Investigation (against
-> Purchase Order, since removed from scope — see [Future Enhancements](#future-enhancements) below)
-> confirmed that Frappe 15 does not reliably fire this event via REST API or desk UI saves. This
-> platform limitation was only verified against Purchase Order; if edits to an already-submitted
-> Contract need to be re-indexed automatically, re-verify against Contract before assuming the same
-> gap applies.
+> **Note:** a Desk save on an already-submitted Contract where only `allow_on_submit` fields changed
+> (e.g. `is_signed`) fires `on_update_after_submit`, not `on_update` — Frappe classifies these as a
+> distinct action. `contract-on-update` alone never catches this case; `contract-on-update-after-submit`
+> is required for it too. See [Post-submit edits are now re-indexed](#post-submit-edits-are-now-re-indexed-contract-on_update_after_submit)
+> below for why this was broken until 2026-08-28.
 
 ### Via REST API (scripted setup)
 
@@ -343,10 +343,11 @@ SECRET = "<your WEBHOOK_SECRET>"
 URL = "http://127.0.0.1:8000/webhook/erpnext"
 
 WEBHOOKS = [
-    ("contract-on-submit", "Contract",            "on_submit"),
-    ("contract-on-update", "Contract",            "on_update"),
-    ("contract-on-cancel", "Contract",            "on_cancel"),
-    ("terms-on-update",    "Terms and Conditions","on_update"),
+    ("contract-on-submit",              "Contract",            "on_submit"),
+    ("contract-on-update",              "Contract",            "on_update"),
+    ("contract-on-update-after-submit", "Contract",            "on_update_after_submit"),
+    ("contract-on-cancel",              "Contract",            "on_cancel"),
+    ("terms-on-update",                 "Terms and Conditions","on_update"),
 ]
 
 WEBHOOK_JSON = '{"doctype": "{{ doc.doctype }}", "docname": "{{ doc.name }}"}'
@@ -374,11 +375,17 @@ The webhook handler (`ingestion/webhook_handler.py`) is event-agnostic: for any 
 - **PO amended** → amendment creates a new PO (new `docname`) → `on_submit` fires again on the amendment
 - **PO cancelled** → `on_cancel` fires → re-indexed with status=Cancelled
 - **Invoice submitted/cancelled** → indexed/re-indexed the same way as POs (no attachment handling)
-- **Contract updated** → `on_update` fires → re-indexed with latest content, including any attached PDFs (true for a **draft** Contract; see the known gap below for edits made *after* submit)
+- **Contract updated (draft)** → `on_update` fires → re-indexed with latest content, including any attached PDFs
+- **Contract's `allow_on_submit` field edited after submit** (e.g. toggling `is_signed`) → `on_update_after_submit` fires → re-indexed with the updated `status` (fixed 2026-08-28, see [Post-submit edits are now re-indexed](#post-submit-edits-are-now-re-indexed-contract-on_update_after_submit))
 - **Terms and Conditions updated** → `on_update` fires → re-indexed
 - **Scorecard updated** → `on_update` fires → re-indexed
 
-> **Known gap:** edits to an already-submitted PO or Contract (e.g. changing a PO's delivery date, or toggling Contract's `is_signed`) do not trigger re-indexing. Frappe 15 does not reliably fire a webhook for a Desk save on a submitted document — confirmed for PO's `on_update_after_submit` and, via a live `RUN_E2E=1` run of `tests/e2e/test_erpnext_desk_update_after_submit.py`, for Contract's plain `on_update` too (zero webhook delivery attempts recorded in Frappe's own Webhook Request Log for that action — not a failed delivery, one that never fires). The Qdrant vector will reflect the state at submission time until the next `on_cancel`/re-submission or a manual full re-index (`POST /ingest/full`). See [Future Enhancements](#future-enhancements).
+> **Known gap (PO only, out of scope):** edits to an already-submitted PO (e.g. changing its delivery
+> date) do not trigger re-indexing — Frappe does not reliably fire a webhook for a Desk save on a
+> submitted PO via any tested approach. PO ingestion is out of scope for this project (descoped), so
+> this is not being pursued further; it's recorded here only because the same underlying platform gap
+> was also confirmed for Contract and has since been fixed there — see
+> [Post-submit edits are now re-indexed](#post-submit-edits-are-now-re-indexed-contract-on_update_after_submit).
 
 ---
 
@@ -898,24 +905,49 @@ enhancement below.
 
 ## Future Enhancements
 
-### Post-submit edits aren't re-indexed (PO's `on_update_after_submit`, Contract's `on_update`)
+### Post-submit edits are now re-indexed (Contract, `on_update_after_submit`)
 
-**Status:** Not implemented — blocked by Frappe 15 platform limitation. **Confirmed on Contract too**
-(2026-07-23, `tests/e2e/test_erpnext_desk_update_after_submit.py`, `RUN_E2E=1` live run) — this was
-previously only verified against Purchase Order, before PO was removed from scope.
+**Status:** Fixed 2026-08-28 for Contract (#96). Still an open gap for PO, but PO is out of scope
+(descoped) so not being pursued.
 
-**Problem:** When a buyer edits a field on an already-submitted Purchase Order (e.g. adjusting the delivery date or adding remarks), the Qdrant vector is not updated. The indexed document reflects the state at submission time. The same is true for Contract: toggling `is_signed` via the Desk UI on a submitted Contract (a legal `allow_on_submit` edit — ERPNext's own controller correctly flips `status` from "Unsigned" to "Active" as a result) never reaches Qdrant.
+**The original problem:** toggling `is_signed` via the Desk UI on a submitted Contract (a legal
+`allow_on_submit` edit — ERPNext's own controller correctly flips `status` from "Unsigned" to
+"Active" as a result) never reached Qdrant. Confirmed 2026-07-23 via a live `RUN_E2E=1` run of
+`tests/e2e/test_erpnext_desk_update_after_submit.py` (both tests were `xfail(strict=True)`,
+documenting it as a known platform limitation).
 
-**Root cause:** Frappe 15 does not reliably fire a webhook for a Desk save on an already-submitted document. For PO, tested approaches that all failed to enqueue the `on_update_after_submit` webhook:
-- `frappe.client.save` via REST API
-- `frappe.desk.form.save.savedocs` via REST API
-- Save from the ERPNext desk UI
+**Root cause, and the fix:**
+1. A Desk save on an already-submitted doc where only `allow_on_submit` fields changed fires Frappe's
+   `on_update_after_submit` hook, not `on_update` — this project's only registered post-submit
+   Contract webhook was plain `on_update`, which was never going to catch this case regardless of any
+   platform bug. Separately, Frappe's webhook dispatcher (`frappe/integrations/doctype/webhook/__init__.py`,
+   `run_webhooks()`) hardcoded an event allow-list that omitted `on_update_after_submit` even though
+   it's a valid, selectable `webhook_docevent` — so a *correctly configured* webhook for that event
+   would have silently never fired anyway. Fixed upstream in frappe/frappe#39164 (merged to `develop`
+   2026-05-08, backported to `version-16-hotfix`/`version-15-hotfix`; first public release
+   v15.107.3). This dev bench's installed frappe (16.30.0) already includes the fix.
+2. Unrelated, and specific to this bench: the dev site was migrated from bench `b2` to `b3` on
+   2026-08-21 (`CLAUDE.local.md`), and `Password`-fieldtype values (like `Webhook.webhook_secret`)
+   are encrypted per-site using `site_config.json`'s `encryption_key`, which differs between `b2` and
+   `b3`. Every existing webhook's secret, carried over from `b2` in the site restore, was silently
+   undecryptable on `b3` (`cryptography.fernet.InvalidToken`) — so *no* Contract/Terms webhook fired
+   at all (not just the `on_update_after_submit` one) until each was re-saved to re-encrypt under the
+   current key. **Any future bench/site migration needs the same re-save step for every
+   `Password`-type field carried over in a restore** — this is easy to miss since it fails silently
+   (Frappe's own Webhook Request Log shows the error, but nothing surfaces it proactively).
 
-For Contract, the registered webhook is plain `on_update` (not `on_update_after_submit`) — and even that doesn't fire. `tests/e2e/test_erpnext_desk_update_after_submit.py` confirmed this conclusively by checking Frappe's own **Webhook Request Log** doctype: zero delivery attempts were recorded for the Desk "Update" action window — not a failed delivery, one that was never attempted. The corresponding test is marked `xfail(strict=True)` in the suite, documenting this as a known limitation rather than a bug in the test.
+**What changed:** registered `contract-on-update-after-submit` (`on_update_after_submit`), alongside
+the existing four webhooks (see the table above); re-saved `contract-on-submit`/`contract-on-update`/
+`contract-on-cancel`/`terms-on-update` to fix their broken encryption. Removed the `xfail` marker from
+`tests/e2e/test_erpnext_desk_update_after_submit.py`'s first test (now genuinely passes) and updated
+the second test's assertion to reflect that repeated saves *do* now re-index each time — it verifies
+idempotent upsert holds across those cycles, rather than verifying nothing happens.
 
-**Workaround:** Run a full re-index (`POST /ingest/full`) after bulk PO/Contract edits, or wait for the next `on_cancel`/re-submission event.
-
-**When to revisit:** If a future Frappe release resolves this, add the `po-on-update-submitted` webhook back (it is already handled by the event-agnostic webhook handler), remove the `xfail` marker from `tests/e2e/test_erpnext_desk_update_after_submit.py` (it's `strict=True`, so an unexpected pass will already surface loudly as a failure), and reinstate the E2E integration test in `tests/test_integration.py` for PO if that doctype comes back into scope.
+**PO's variant of this gap is unaddressed** (out of scope): tested approaches
+(`frappe.client.save`/`frappe.desk.form.save.savedocs` REST calls, Desk UI save) all failed to enqueue
+the `on_update_after_submit` webhook for PO before it was descoped. If PO ingestion ever comes back
+into scope, re-verify against the current frappe version before assuming the same gap still applies —
+it may already be fixed the same way Contract's was.
 
 ### Mesh VPN (Tailscale) for team-wide Langfuse/Qdrant access
 

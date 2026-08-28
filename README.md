@@ -227,7 +227,9 @@ See `.env.example` for the full list with generation instructions. Key groups:
 
 ## Incremental Indexing
 
-ERPNext webhooks fire on `on_submit` / `on_cancel` / `on_update` events. The webhook endpoint:
+ERPNext webhooks fire on `on_submit` / `on_cancel` / `on_update` / `on_update_after_submit` events
+(the last covers `allow_on_submit` field edits, e.g. Contract's `is_signed`, made after submit). The
+webhook endpoint:
 1. Validates the HMAC-SHA256 signature (`X-Frappe-Webhook-Signature`)
 2. Fetches the full updated document via ERPNext REST API
 3. Deletes all existing Qdrant chunks for that `docname`

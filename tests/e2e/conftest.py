@@ -293,9 +293,11 @@ def desk_login_state(browser, app_reachable):
     page.fill("#login_password", password)
     page.click(".btn-login")
     # Playwright glob patterns don't match `/` with a bare `*` (only `**` does),
-    # so f"{ERPNEXT_URL}/app*" never matches ERPNext's actual post-login
-    # redirect to /app/home -- use a regex instead. Found by running this live.
-    page.wait_for_url(re.compile(rf"{re.escape(ERPNEXT_URL)}/app(/.*)?$"), timeout=15000)
+    # so f"{ERPNEXT_URL}/desk*" never matches ERPNext's actual post-login
+    # redirect to /desk/home -- use a regex instead. Found by running this live.
+    # Frappe v16 renamed the Desk route from /app to /desk (/app now 301s to
+    # /desk) -- this suite targets v16 (see CLAUDE.local.md), so match /desk.
+    page.wait_for_url(re.compile(rf"{re.escape(ERPNEXT_URL)}/desk(/.*)?$"), timeout=15000)
     state = context.storage_state()
     context.close()
     return state
