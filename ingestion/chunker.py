@@ -11,6 +11,8 @@ from typing import TypedDict
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
+from config import CHUNK_OVERLAP, CHUNK_SIZE
+
 
 class Chunk(TypedDict):
     text: str
@@ -20,8 +22,8 @@ class Chunk(TypedDict):
 
 def chunk_text(
     text: str,
-    chunk_size: int = 512,
-    chunk_overlap: int = 64,
+    chunk_size: int = CHUNK_SIZE,
+    chunk_overlap: int = CHUNK_OVERLAP,
     force_single_chunk: bool = False,
 ) -> list[Chunk]:
     """Split `text` into overlapping chunks for embedding.
