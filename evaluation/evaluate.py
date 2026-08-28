@@ -5,7 +5,7 @@ single pass (rewrite → hybrid search → rerank → generate), captures the ra
 retrieved chunk texts for RAGAS, then scores faithfulness, answer_relevancy,
 context_recall, and context_precision.  Results are written to
 evaluation/results.json (including a `config` block recording the prompt /
-retrieval knobs and library versions the run used).
+retrieval / ingestion knobs and library versions the run used).
 
 The generation prompt, context-framing fields and top_k / top_n come from
 pipeline.constants -- the same module query_pipeline.py uses -- so a baseline
@@ -38,7 +38,7 @@ _PROJECT_ROOT = _ROOT.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from config import OPENAI_MODEL  # noqa: E402
+from config import CHUNK_OVERLAP, CHUNK_SIZE, EMBEDDING_MODEL, OPENAI_MODEL  # noqa: E402
 from pipeline.constants import (  # noqa: E402
     ANSWER_SYSTEM_PROMPT,
     CONTEXT_META_FIELDS,
@@ -313,6 +313,16 @@ def _repo_relative(path: Path) -> str:
 def _run_config() -> dict:
     """Everything that shifts the numbers but isn't the dataset or the pipeline
     code -- so a baseline is self-describing and two runs are comparable.
+
+    Includes the ingestion-time knobs (chunk_size/chunk_overlap/embedding_model)
+    even though evaluate.py doesn't run ingestion itself -- it scores whatever is
+    already indexed in Qdrant. Recording them here means a baseline still shows
+    what produced that collection, so a score delta isn't silently misattributed
+    to a query-time change when the corpus was actually re-chunked or re-embedded.
+    Re-ingest deliberately (`POST /ingest/full`) before rerunning evaluate.py when
+    testing a chunking change -- evaluate.py does not do this itself, since
+    embedding a full corpus has a very different cost profile than scoring ~20
+    questions.
     """
     from importlib.metadata import PackageNotFoundError
     from importlib.metadata import version as _pkg_version
@@ -331,6 +341,9 @@ def _run_config() -> dict:
         "generation_model": OPENAI_MODEL,
         "generation_max_tokens": GENERATION_MAX_TOKENS,
         "ragas_judge_model": _RAGAS_JUDGE_MODEL,
+        "embedding_model": EMBEDDING_MODEL,
+        "chunk_size": CHUNK_SIZE,
+        "chunk_overlap": CHUNK_OVERLAP,
         "versions": versions,
     }
 

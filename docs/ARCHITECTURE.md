@@ -100,6 +100,14 @@ Generation and embedding model names are centralized in `config.py`, set via the
 the `QUERY_REWRITE_STRATEGY` pattern. Every call site (`query_rewriter.py`, `query_pipeline.py`,
 `embedder.py`, `evaluate.py`) reads from `config.py` instead of hardcoding a model literal.
 
+Chunking (`CHUNK_SIZE`, default `512`; `CHUNK_OVERLAP`, default `64`) is centralized the same way,
+read by `ingestion/chunker.py`'s `chunk_text()` default arguments. `evaluate.py`'s `_run_config()`
+records `chunk_size`/`chunk_overlap`/`embedding_model` alongside the query-time knobs it already
+tracked, so a `results.json` baseline is self-describing about what produced the indexed Qdrant
+collection it scored — not just what query-time settings ran. `evaluate.py` does not re-run
+ingestion itself: re-chunking or re-embedding requires a deliberate `POST /ingest/full` first, then
+`evaluate.py` scores whatever is currently indexed.
+
 **Caveat — embedding model swaps:** `retrieval/vector_store.py`'s `VECTOR_DIM` is derived from
 `EMBEDDING_MODEL` via `config.embedding_dimension()`, which maps model name → vector size. The
 Qdrant collection's vector size is fixed at creation time (`ensure_collection`), so switching to an

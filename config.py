@@ -1,8 +1,8 @@
-"""Central model configuration, env-var driven.
+"""Central model + ingestion configuration, env-var driven.
 
 Mirrors the QUERY_REWRITE_STRATEGY pattern used elsewhere in the pipeline: model
-choice lives here instead of being a string literal scattered across
-ingestion/pipeline/evaluation call sites, so swapping a model is a one-line env
+and chunking choices live here instead of being scattered across
+ingestion/pipeline/evaluation call sites, so changing one is a one-line env
 var change.
 
 Swapping EMBEDDING_MODEL to a model with a different vector dimension requires
@@ -17,6 +17,13 @@ import os
 
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
+
+# Ingestion chunking -- see ingestion/chunker.py. Centralized here (rather than as
+# bare function-argument defaults) so evaluate.py's run config can record what
+# produced the currently-indexed Qdrant collection, the same way it already records
+# the query-time knobs.
+CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "512"))
+CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "64"))
 
 # Only models whose dimension has been verified are listed here. Add an entry
 # before pointing EMBEDDING_MODEL at a new model.
