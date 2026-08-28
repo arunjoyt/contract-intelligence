@@ -147,9 +147,10 @@ ERPNext --REST API (full ingest) / Webhooks (incremental)--> Ingestion --> Qdran
   index fused with Qdrant vector search via Reciprocal Rank Fusion, `k=60`) + `reranker.py`
   (`cross-encoder/ms-marco-MiniLM-L-6-v2`, lazy singleton, loaded once at startup).
 - **Pipeline** (`pipeline/`): `query_rewriter.py` (HyDE or step-back rewriting, controlled by
-  `QUERY_REWRITE_STRATEGY`) → `query_pipeline.py` (orchestrates rewrite → metadata filter extraction →
-  hybrid search top-20 → rerank top-5 → `OPENAI_MODEL` generation, default `gpt-4o`, with required source
-  citations). Every step is a Langfuse child span. `OPENAI_MODEL`/`EMBEDDING_MODEL` are centralized in
+  `QUERY_REWRITE_STRATEGY`, on `REWRITE_MODEL` / default `gpt-4o-mini`) → `query_pipeline.py`
+  (orchestrates rewrite → metadata filter extraction → hybrid search top-20 → rerank top-5 →
+  `OPENAI_MODEL` generation, default `gpt-4o`, with required source citations). Every step is a
+  Langfuse child span. `OPENAI_MODEL`/`REWRITE_MODEL`/`EMBEDDING_MODEL` are centralized in
   `config.py` (see `docs/ARCHITECTURE.md` § Model Configuration).
 - **API** (`api/main.py`): `POST /query`, `POST /webhook/erpnext`, `POST /ingest/full` (background task,
   `X-Admin-Secret`-gated), `GET /health`. Startup hook ensures the Qdrant collection exists, rebuilds the
@@ -185,7 +186,7 @@ so ingestion embedding cost is tracked (see `docs/ARCHITECTURE.md` § Observabil
 
 1. `QueryRewriter.rewrite()` — HyDE (default) embeds a hypothetical answer document instead of the raw
    query, improving recall for abstract questions; step-back rewrites the question at a higher abstraction
-   level instead.
+   level instead. The chat call runs on `REWRITE_MODEL` (default `gpt-4o-mini`), not `OPENAI_MODEL`.
 2. Metadata filter extraction (pure keyword heuristic — doctype/status only, no LLM call, no date-range
    parsing) from the original question.
 3. `HybridSearch.search()` — BM25 + Qdrant vector search in parallel, fused via RRF, top-20.

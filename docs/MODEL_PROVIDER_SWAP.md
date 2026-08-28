@@ -1,7 +1,8 @@
 # Switching Model Provider — Developer Steps (as of current codebase)
 
 There is currently **no abstraction layer** for the LLM/embedding provider — `config.py`
-(`OPENAI_MODEL`/`EMBEDDING_MODEL`) only centralizes *model names*, not the *provider*. Every call
+(`OPENAI_MODEL`/`REWRITE_MODEL`/`EMBEDDING_MODEL`) only centralizes *model names*, not the
+*provider*. Every call
 site constructs a raw `openai.OpenAI()` client and reads its response shape directly. Swapping
 providers today means touching each of these call sites by hand. This doc is the concrete list of
 what to change — see `docs/ARCHITECTURE.md` § "Model Configuration" for how the current
@@ -30,9 +31,11 @@ Replace with the new provider's key env var name at each site, and update `.env.
 
 ## 3. Update `config.py`
 
-`OPENAI_MODEL`/`EMBEDDING_MODEL` (`config.py:18-19`) hold model ID strings — rename or repurpose
-them for the new provider's model IDs (e.g. update the default value and the env var name if you
-want it to read something other than `OPENAI_MODEL`). If the new provider does embeddings with a
+`OPENAI_MODEL`/`REWRITE_MODEL`/`EMBEDDING_MODEL` (`config.py`) hold model ID strings — rename or
+repurpose them for the new provider's model IDs (e.g. update the default value and the env var name
+if you want it to read something other than `OPENAI_MODEL`). `REWRITE_MODEL` feeds the HyDE /
+step-back chat call in `query_rewriter.py`; it can point at the same provider as `OPENAI_MODEL` or a
+different one. If the new provider does embeddings with a
 different vector dimension, add an entry to `_EMBEDDING_DIMENSIONS` (`config.py:24-28`) — this is
 not optional: `retrieval/vector_store.py:32`'s `VECTOR_DIM` is derived from this dict at import
 time, and an unrecognized model raises immediately (`config.py:34-40`).

@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from config import OPENAI_MODEL
+from config import REWRITE_MODEL
 from pipeline.query_rewriter import (
     _HYDE_SYSTEM,
     _STEP_BACK_SYSTEM,
@@ -68,7 +68,7 @@ def test_strategy_arg_overrides_env(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_hyde_calls_gpt4o_with_hyde_system_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_hyde_calls_llm_with_hyde_system_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     embedder = _make_embedder()
 
@@ -147,7 +147,7 @@ def test_hyde_falls_back_to_original_query_on_empty_response(
 # ---------------------------------------------------------------------------
 
 
-def test_step_back_calls_gpt4o_with_step_back_system_prompt(
+def test_step_back_calls_llm_with_step_back_system_prompt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -223,7 +223,9 @@ def test_step_back_falls_back_to_original_on_empty_response(
 # ---------------------------------------------------------------------------
 
 
-def test_rewrite_uses_configured_model(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_rewrite_uses_rewrite_model_not_generation_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The rewrite chat call runs on REWRITE_MODEL (a cheaper/faster model), not
+    OPENAI_MODEL -- it only needs a scaffold paragraph to embed (issue #120)."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     mock_client = MagicMock()
     mock_client.chat.completions.create.return_value = _make_openai_response("answer")
@@ -234,4 +236,12 @@ def test_rewrite_uses_configured_model(monkeypatch: pytest.MonkeyPatch) -> None:
     r.rewrite("query")
 
     kwargs = mock_client.chat.completions.create.call_args[1]
-    assert kwargs["model"] == OPENAI_MODEL
+    assert kwargs["model"] == REWRITE_MODEL
+
+
+def test_rewrite_model_differs_from_generation_model_by_default() -> None:
+    """#120: the whole point is that the rewrite step no longer pays gpt-4o."""
+    from config import OPENAI_MODEL
+
+    assert REWRITE_MODEL == "gpt-4o-mini"
+    assert REWRITE_MODEL != OPENAI_MODEL

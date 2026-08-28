@@ -32,4 +32,5 @@ def test_run_config_records_the_knobs() -> None:
     assert cfg["rerank_top_n"] == pc.RERANK_TOP_N
     assert cfg["generation_max_tokens"] == pc.GENERATION_MAX_TOKENS
     assert cfg["rewrite_strategy"] in {"hyde", "step_back"}
+    assert cfg["rewrite_model"] == ev.REWRITE_MODEL
     assert "ragas" in cfg["versions"]

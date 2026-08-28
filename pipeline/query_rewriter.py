@@ -1,11 +1,15 @@
 """Query rewriting for the retrieval pipeline.
 
 Two strategies, controlled by the QUERY_REWRITE_STRATEGY env var:
-- 'hyde' (default): Prompt GPT-4o to write a hypothetical contract
+- 'hyde' (default): Prompt the rewrite model to write a hypothetical contract
   document that would answer the question, then embed that document.
   Improves recall by searching in answer-space rather than query-space.
-- 'step_back': Prompt GPT-4o to rewrite the question at a higher
+- 'step_back': Prompt the rewrite model to rewrite the question at a higher
   abstraction level, then embed the rewritten question.
+
+The chat call uses REWRITE_MODEL (config.py), not OPENAI_MODEL -- this step only
+needs a scaffold paragraph to embed, and reusing gpt-4o made it dominate query
+latency (issue #120).
 """
 
 from __future__ import annotations
@@ -14,7 +18,7 @@ import os
 
 from openai import OpenAI
 
-from config import OPENAI_MODEL
+from config import REWRITE_MODEL
 from ingestion.embedder import Embedder
 
 _HYDE_SYSTEM = (
@@ -56,7 +60,7 @@ class QueryRewriter:
 
     def _hyde(self, query: str) -> str:
         response = self._client.chat.completions.create(
-            model=OPENAI_MODEL,
+            model=REWRITE_MODEL,
             messages=[
                 {"role": "system", "content": _HYDE_SYSTEM},
                 {"role": "user", "content": query},
@@ -68,7 +72,7 @@ class QueryRewriter:
 
     def _step_back(self, query: str) -> str:
         response = self._client.chat.completions.create(
-            model=OPENAI_MODEL,
+            model=REWRITE_MODEL,
             messages=[
                 {"role": "system", "content": _STEP_BACK_SYSTEM},
                 {"role": "user", "content": query},
