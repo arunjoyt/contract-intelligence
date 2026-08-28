@@ -14,10 +14,11 @@ request handler can reach them without module-level globals.
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from dataclasses import asdict
 from typing import Any
 from urllib.parse import quote
@@ -102,6 +103,10 @@ async def _lifespan(app: FastAPI):
     app.state.langfuse = lf
     app.state.erpnext_client = erpnext_client
     app.state.webhook_secret = webhook_secret
+    # Serializes full-ingest runs: overlapping runs are harmless but wasteful
+    # (each re-embeds the whole corpus), so a second request while one is in
+    # flight is rejected rather than queued (see issue #125).
+    app.state.ingest_lock = asyncio.Lock()
     app.state.oauth_state: dict[str, str] = {}
     app.state.oauth_completed: dict[str, tuple[float, str, str]] = {}
 
@@ -159,12 +164,15 @@ def ingest_full(
     x_admin_secret: str | None = Header(default=None),
 ) -> dict[str, str]:
     _check_admin_secret(x_admin_secret)
+    if app.state.ingest_lock.locked():
+        raise HTTPException(status_code=409, detail="A full ingest is already running")
     background_tasks.add_task(
         _run_full_ingest,
         app.state.embedder,
         app.state.vector_store,
         app.state.hybrid_search,
         app.state.langfuse,
+        app.state.ingest_lock,
     )
     return {"status": "accepted"}
 
@@ -194,11 +202,28 @@ async def _run_full_ingest(
     vector_store: VectorStore,
     hybrid_search: HybridSearch,
     langfuse: Any | None = None,
+    lock: asyncio.Lock | None = None,
+) -> None:
+    if lock is not None and lock.locked():
+        # A run slipped past the endpoint's `locked()` check before this task
+        # started (issue #125). Skip rather than pile on a redundant re-embed.
+        logger.warning("Full ingest already running — skipping duplicate run")
+        return
+    async with lock or nullcontext():
+        await _do_full_ingest(embedder, vector_store, hybrid_search, langfuse)
+
+
+async def _do_full_ingest(
+    embedder: Embedder,
+    vector_store: VectorStore,
+    hybrid_search: HybridSearch,
+    langfuse: Any | None,
 ) -> None:
     logger.info("Full ingest started")
     trace = langfuse.trace(name="full_ingest") if langfuse else None
     docs_indexed = 0
     chunks_indexed = 0
+    failed_listings: list[str] = []
 
     async with ERPNextClient() as client:
         for doctype in _INGEST_DOCTYPES:
@@ -212,6 +237,7 @@ async def _run_full_ingest(
                         list_span.update(output={"count": len(doc_list)})
             except Exception:
                 logger.exception("Failed to list %s", doctype)
+                failed_listings.append(doctype)
                 continue
 
             logger.info("Ingesting %d %s documents", len(doc_list), doctype)
@@ -243,11 +269,30 @@ async def _run_full_ingest(
                     logger.exception("Failed to ingest %s %s", doctype, name)
 
     hybrid_search.build_bm25_index(vector_store.get_all_texts())
+
+    # A run that indexes nothing, or where a doctype listing errored, is never a
+    # legitimate outcome for this app -- surface it instead of reporting a clean
+    # "complete" (issue #125).
+    failed = bool(failed_listings) or docs_indexed == 0
+    output: dict[str, Any] = {
+        "documents_indexed": docs_indexed,
+        "chunks_indexed": chunks_indexed,
+    }
+    if failed:
+        output["status"] = "error"
+    if failed_listings:
+        output["failed_listings"] = failed_listings
     if trace:
-        trace.update(
-            output={"documents_indexed": docs_indexed, "chunks_indexed": chunks_indexed}
+        trace.update(output=output)
+
+    if failed:
+        logger.error(
+            "Full ingest finished abnormally: indexed %d docs, failed listings: %s",
+            docs_indexed,
+            failed_listings or "none",
         )
-    logger.info("Full ingest complete")
+    else:
+        logger.info("Full ingest complete")
 
 
 # ---------------------------------------------------------------------------
