@@ -47,7 +47,13 @@ _PROJECT_ROOT = _ROOT.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from config import CHUNK_OVERLAP, CHUNK_SIZE, EMBEDDING_MODEL, OPENAI_MODEL  # noqa: E402
+from config import (  # noqa: E402
+    CHUNK_OVERLAP,
+    CHUNK_SIZE,
+    EMBEDDING_MODEL,
+    OPENAI_MODEL,
+    REWRITE_MODEL,
+)
 from evaluation.langfuse_dataset import build_client, dataset_item_id  # noqa: E402
 from pipeline.constants import (  # noqa: E402
     ANSWER_SYSTEM_PROMPT,
@@ -524,6 +530,7 @@ def _run_config() -> dict:
 
     return {
         "rewrite_strategy": os.environ.get("QUERY_REWRITE_STRATEGY", "hyde"),
+        "rewrite_model": REWRITE_MODEL,
         "retrieval_top_k": RETRIEVAL_TOP_K,
         "rerank_top_n": RERANK_TOP_N,
         "generation_model": OPENAI_MODEL,

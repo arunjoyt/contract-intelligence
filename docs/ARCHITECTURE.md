@@ -100,6 +100,11 @@ Generation and embedding model names are centralized in `config.py`, set via the
 the `QUERY_REWRITE_STRATEGY` pattern. Every call site (`query_rewriter.py`, `query_pipeline.py`,
 `embedder.py`, `evaluate.py`) reads from `config.py` instead of hardcoding a model literal.
 
+`REWRITE_MODEL` (default `gpt-4o-mini`) is a third, separate knob for the pre-retrieval HyDE /
+step-back chat call in `query_rewriter.py`. It's deliberately not `OPENAI_MODEL`: the rewrite only
+needs a scaffold paragraph to embed, and on `gpt-4o` it was ~58% of end-to-end query latency
+(issue #120). `evaluate.py`'s `_run_config()` records `rewrite_model` alongside `rewrite_strategy`.
+
 Chunking (`CHUNK_SIZE`, default `512`; `CHUNK_OVERLAP`, default `64`) is centralized the same way,
 read by `ingestion/chunker.py`'s `chunk_text()` default arguments. `evaluate.py`'s `_run_config()`
 records `chunk_size`/`chunk_overlap`/`embedding_model` alongside the query-time knobs it already
@@ -117,8 +122,8 @@ import time until their dimension is added to `config._EMBEDDING_DIMENSIONS`.
 
 ### Future Enhancement — provider-agnostic adapter (not implemented)
 
-`OPENAI_MODEL`/`EMBEDDING_MODEL` (above) solve swapping the OpenAI *model version*, not the
-*provider* — every call site (`query_rewriter.py`, `query_pipeline.py`, `embedder.py`,
+`OPENAI_MODEL`/`REWRITE_MODEL`/`EMBEDDING_MODEL` (above) solve swapping the OpenAI *model version*,
+not the *provider* — every call site (`query_rewriter.py`, `query_pipeline.py`, `embedder.py`,
 `evaluate.py`) still constructs a raw `openai.OpenAI()` client and reads its response shape
 directly (`response.choices[0].message.content` / `response.data[i].embedding`).
 

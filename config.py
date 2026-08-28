@@ -18,6 +18,13 @@ import os
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
 
+# Model for the pre-retrieval query rewrite (HyDE / step-back). Kept separate from
+# OPENAI_MODEL because the rewrite only needs a rough scaffold paragraph to embed,
+# not user-facing prose -- and the rewrite call was ~58% of end-to-end query
+# latency when it reused gpt-4o (see issue #120). Defaults to a cheaper/faster
+# model.
+REWRITE_MODEL = os.environ.get("REWRITE_MODEL", "gpt-4o-mini")
+
 # Ingestion chunking -- see ingestion/chunker.py. Centralized here (rather than as
 # bare function-argument defaults) so evaluate.py's run config can record what
 # produced the currently-indexed Qdrant collection, the same way it already records

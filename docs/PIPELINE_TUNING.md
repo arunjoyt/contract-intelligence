@@ -20,6 +20,7 @@ below and #127.
 | `chunk_overlap` | 64 | `ingestion/chunker.py` | ingest | overlap between adjacent chunks | judge |
 | `EMBEDDING_MODEL` | `text-embedding-3-small` | `config.py` | ingest + query | the dense vector space | deterministic (`recall@k`) |
 | `QUERY_REWRITE_STRATEGY` | `hyde` | env / `pipeline/query_rewriter.py` | pre-retrieval | what text is embedded as the query vector | deterministic (`recall@k`) |
+| `REWRITE_MODEL` | `gpt-4o-mini` | `config.py` | pre-retrieval | model for the HyDE / step-back chat call — quality of the scaffold vs. its latency/cost | deterministic (`recall@k`) + latency |
 | HyDE gen params | `temperature=0.7`, `max_tokens=256` | `pipeline/query_rewriter.py` | pre-retrieval | shape of the hypothetical doc | deterministic |
 | RRF `k` | 60 | `retrieval/hybrid_search.py:30` | fusion | rank-fusion smoothing constant (not a "top-k") | deterministic |
 | `RETRIEVAL_TOP_K` | 20 | `pipeline/constants.py:17` | retrieve → rerank | candidate pool the cross-encoder rescores | deterministic (`recall@k`) |
@@ -34,8 +35,8 @@ below and #127.
 LLM does with them. Tune with deterministic IR metrics (`recall@k`, `MRR`,
 `nDCG@n`) computed straight from the fused/ranked list against qrels: no LLM judge,
 no OpenAI quota, no run-to-run noise. Covers `EMBEDDING_MODEL`,
-`QUERY_REWRITE_STRATEGY`, the HyDE params, RRF `k`, `RETRIEVAL_TOP_K`,
-`RERANKER_MODEL`.
+`QUERY_REWRITE_STRATEGY`, `REWRITE_MODEL`, the HyDE params, RRF `k`,
+`RETRIEVAL_TOP_K`, `RERANKER_MODEL`.
 
 **Generator-dependent** — the knob changes what the LLM sees or is. Needs the full
 pipeline + RAGAS judge + the statistical treatment below. Covers `RERANK_TOP_N`,
@@ -84,7 +85,7 @@ Each knob's pool or behaviour feeds the next, so tune in pipeline order:
 1. `chunk_size` / `chunk_overlap` — deterministic recall first, then revisit
    against `top_n` at the end (Step E).
 2. `EMBEDDING_MODEL` — only if #101 / #90 make a swap real.
-3. `QUERY_REWRITE_STRATEGY` — Step A.
+3. `QUERY_REWRITE_STRATEGY` (+ `REWRITE_MODEL`) — Step A.
 4. RRF `k` — small deterministic sweep, k ∈ {10, 30, 60, 100}; RRF is
    insensitive to k over wide ranges, so expect no move and leave it at 60.
 5. `RETRIEVAL_TOP_K` — Step B.
@@ -101,9 +102,10 @@ Three arms: `hyde` (default), `step_back`, and `none` (embed the raw question).
 **Priors:**
 
 - **HyDE** searches in answer-space — helps when the question's vocabulary
-  diverges from the corpus (`semantic-no-anchor`). Costs an extra `OPENAI_MODEL`
-  call (~0.5–1 s) per query, and on a ~60-chunk corpus a hallucinated entity in
-  the hypothetical doc can drag retrieval off-target.
+  diverges from the corpus (`semantic-no-anchor`). Costs an extra `REWRITE_MODEL`
+  chat call per query (~0.5–1 s on `gpt-4o-mini`; it was ~2.5 s and ~58% of
+  end-to-end latency on `gpt-4o` before #120), and on a ~60-chunk corpus a
+  hallucinated entity in the hypothetical doc can drag retrieval off-target.
 - **Step-back** abstracts the question — helps multi-hop / "why" questions, can
   *lose* the specific anchor (supplier token, doc number) on point lookups.
 - This corpus is mostly point lookups with distinctive supplier tokens, and BM25
@@ -114,6 +116,13 @@ Three arms: `hyde` (default), `step_back`, and `none` (embed the raw question).
 record the fused rank of every gold chunk. Compute `recall@20` and `MRR` per
 `case_class`. HyDE additionally gets a `temperature` sub-sweep (0.0 / 0.3 / 0.7) —
 a hotter hypothetical doc trades precision for recall.
+
+`REWRITE_MODEL` sub-sweep (default `gpt-4o-mini` since #120): re-run the HyDE arm
+with `gpt-4o-mini` vs `gpt-4o` and diff `recall@20` / `MRR` per slice against the
+`rewrite` span latency (Langfuse). #120's premise is that the scaffold only needs
+to be topically close enough to embed, so the cheaper model should hold recall
+while roughly halving the step. Keep the cheapest model whose recall is within
+noise of the best.
 
 **Expected outcome:** intent-dependent — HyDE for `semantic-no-anchor`, `none` for
 `showcase` / `disambiguation`. If so, the fix is a cheap pre-retrieval intent
@@ -212,6 +221,7 @@ single-knob nudge only when a `case_class` slice fails.
 | `chunk_size` / `chunk_overlap` | No | driven by document *structure* (contract / T&C clause length), ~uniform across procurement clients |
 | `EMBEDDING_MODEL` | No | global product decision (#101 / #90) |
 | `QUERY_REWRITE_STRATEGY` + HyDE params | No | depends on question *intent*, not the corpus — and Step A may make it an adaptive classifier anyway |
+| `REWRITE_MODEL` | No | global latency/cost vs. scaffold-quality choice; corpus-independent |
 | RRF `k` | No | fusion constant, insensitive over wide ranges |
 | `RETRIEVAL_TOP_K` | **Weakly** | recall knee shifts with corpus **size** and **homogeneity** (more docs / more boilerplate → gold chunk buried deeper). A bigger pool costs reranker compute only, not generation — so a generous default (20–30) absorbs most clients; revisit only for a genuinely large or homogeneous corpus |
 | `RERANKER_MODEL` | No | global quality / latency choice |
