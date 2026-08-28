@@ -361,8 +361,39 @@ retrieved chunks the same way (`_frame_chunk`) so RAGAS compares like with like.
 `evaluate.py` imports the system prompt, `CONTEXT_META_FIELDS`, and the `top_k` / `top_n` /
 `max_tokens` values from `pipeline/constants.py` — the same module `query_pipeline.py` uses — so a
 baseline run exercises the exact prompt and retrieval budget the live pipeline does. `results.json`
-records a `config` block (rewrite strategy, judge model, generation model, top-k/top-n, pinned
-library versions) so a baseline is self-describing and two runs are comparable (#110).
+records a `config` block (rewrite strategy, judge model, generation model, top-k/top-n, chunking/
+embedding knobs, pinned library versions) so a baseline is self-describing and two runs are
+comparable (#110, #117).
+
+### Langfuse Dataset + Experiment logging (optional, additive)
+
+When `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` are set, `evaluate.py` also records each question as
+a Langfuse trace (input/output/metadata) and pushes the four RAGAS scores onto it via
+`langfuse.score()`. `evaluation/push_dataset.py` is a separate, idempotent one-off script that syncs
+`test_dataset.json` into a Langfuse Dataset (`LANGFUSE_EVAL_DATASET`, default
+`contract-intelligence-golden-set`) — items upsert by an id derived from the question text
+(`evaluation/langfuse_dataset.py`), so re-running it after editing the dataset doesn't duplicate
+items. If a question was pushed first, `evaluate.py` links its trace into a Langfuse Dataset **run**
+named after the current git short SHA, so two pipeline configs' scores are comparable side-by-side in
+the Langfuse UI instead of eyeballing two `results.json` files (#109).
+
+The RAGAS judge LLM/embeddings are passed explicitly to `ragas_evaluate()`
+(`ragas.llms.llm_factory` / `ragas.embeddings.embedding_factory`, pinned to `gpt-4o-mini` /
+`text-embedding-ada-002` in `evaluate.py`) rather than left to ragas's implicit default, so a run's
+judge is reproducible and visible. These are pinned to ragas's own existing defaults, not this app's
+`OPENAI_MODEL`/`EMBEDDING_MODEL` — `answer_relevancy` is embedding-model-sensitive, and swapping in
+`EMBEDDING_MODEL` (`text-embedding-3-small`) measurably shifted it against `results.baseline.json` in
+testing, breaking historical comparability for no benefit.
+
+This whole layer is additive and optional: `evaluate.py` runs identically, and `results.json`/
+`results.baseline.json` are written exactly as before, with no Langfuse credentials at all — the
+offline path this repo's own baseline relies on is unchanged.
+
+**Client deployments (#118):** `test_dataset.json`/`results.baseline.json` in *this* repo are
+synthetic demo data and stay committed. For a real client, point `LANGFUSE_PUBLIC_KEY`/
+`LANGFUSE_SECRET_KEY`/`LANGFUSE_HOST` at their own Langfuse project and run `push_dataset.py` against
+their own (uncommitted) dataset file — their golden-set questions and scores live only in their
+project, never in this repo's git history. `evaluate.py`'s code path is identical either way.
 
 `evaluate.py` runs against whatever is already in the Qdrant collection and exits with an error if
 it is empty — a real run needs a live, fully-ingested collection so retrieval, chunking and parsing

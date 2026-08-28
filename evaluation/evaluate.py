@@ -11,8 +11,15 @@ The generation prompt, context-framing fields and top_k / top_n come from
 pipeline.constants -- the same module query_pipeline.py uses -- so a baseline
 scores the exact pipeline production runs, not a drifting copy (#110).
 
+When LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY are set, each question's trace and
+RAGAS scores are also pushed to Langfuse and, if the question was pushed via
+push_dataset.py first, grouped into a comparable Experiment run in the Langfuse
+Datasets UI (#109). This is additive -- results.json is written exactly as
+before either way, and evaluate.py works with no Langfuse credentials at all.
+
 Usage
 -----
+    python evaluation/push_dataset.py   # once, and after editing test_dataset.json
     python evaluation/evaluate.py [--dataset PATH] [--output PATH]
 """
 
@@ -21,10 +28,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -39,6 +48,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from config import CHUNK_OVERLAP, CHUNK_SIZE, EMBEDDING_MODEL, OPENAI_MODEL  # noqa: E402
+from evaluation.langfuse_dataset import build_client, dataset_item_id  # noqa: E402
 from pipeline.constants import (  # noqa: E402
     ANSWER_SYSTEM_PROMPT,
     CONTEXT_META_FIELDS,
@@ -50,10 +60,67 @@ from pipeline.constants import (  # noqa: E402
 _DEFAULT_DATASET = _ROOT / "test_dataset.json"
 _DEFAULT_OUTPUT = _ROOT / "results.json"
 
-# RAGAS's metric LLM (faithfulness/answer_relevancy/context_* judging) is not the
-# app's OPENAI_MODEL -- it's ragas.llms.llm_factory's default. Recorded in the
-# results so a baseline says which judge produced it.
+# Explicitly pinned rather than left to ragas_evaluate()'s implicit default, so a
+# run's judge is reproducible and visible instead of silently coupled to whatever
+# ragas.llms.llm_factory/embedding_factory default to on a given ragas version (#109).
+# Set to ragas's own current defaults (as of ragas 0.2.6) rather than this app's
+# OPENAI_MODEL/EMBEDDING_MODEL -- the judge is deliberately a separate, cheaper
+# model from the one being judged, and pinning to ragas's existing default keeps
+# this baseline continuous with `results.baseline.json`'s prior (implicitly-pinned)
+# runs instead of shifting the numbers as a side effect of adding the pin. In
+# particular, answer_relevancy is embedding-model-sensitive -- swapping in
+# EMBEDDING_MODEL (text-embedding-3-small) here measurably changed it in testing.
 _RAGAS_JUDGE_MODEL = "gpt-4o-mini"
+_RAGAS_JUDGE_EMBEDDING_MODEL = "text-embedding-ada-002"
+
+
+# ---------------------------------------------------------------------------
+# Langfuse experiment logging (optional -- additive on top of the local
+# results.json/results.baseline.json path, see #109). Absent
+# LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY this whole layer is a no-op: evaluate.py
+# still runs and writes results.json exactly as before.
+# ---------------------------------------------------------------------------
+
+
+def _run_name() -> str:
+    """A short, unique label for one evaluate.py invocation, used to group this
+    run's traces together in the Langfuse Datasets UI.
+
+    Includes a time suffix even in the git-SHA case: two invocations against the
+    same uncommitted HEAD (e.g. iterating on a prompt tweak before committing)
+    would otherwise collide into a single Langfuse run instead of showing as
+    separate, comparable runs.
+    """
+    import subprocess
+
+    stamp = datetime.now(UTC).strftime("%H%M%S")
+    try:
+        sha = (
+            subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=_PROJECT_ROOT,
+                stderr=subprocess.DEVNULL,
+            )
+            .decode()
+            .strip()
+        )
+        return f"eval-{sha}-{stamp}"
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return f"eval-{datetime.now(UTC).strftime('%Y%m%dT')}{stamp}Z"
+
+
+def _link_dataset_run(langfuse, question: str, trace, run_name: str, run_metadata: dict) -> None:
+    """Best-effort: group `trace` into this run's Langfuse Dataset entry.
+
+    Silently skipped if the question was never pushed via push_dataset.py -- the
+    trace and its scores are still recorded either way, just not grouped into a
+    comparable Experiment run in the Datasets UI.
+    """
+    try:
+        item = langfuse.get_dataset_item(id=dataset_item_id(question))
+    except Exception:
+        return
+    item.link(trace, run_name=run_name, run_metadata=run_metadata)
 
 
 # ---------------------------------------------------------------------------
@@ -115,21 +182,33 @@ def _frame_chunk(chunk: dict) -> str:
     return f"[{docname}]{meta_str}:\n{chunk.get('text', '')}"
 
 
-def _run_question(
-    question: str,
-    rewriter,
-    hybrid_search,
-    reranker,
-    openai_client,
-) -> tuple[str, list[str]]:
-    """Return (answer, retrieved_contexts) in a single pipeline pass."""
-    rewritten, _ = rewriter.rewrite(question)
-    candidates = hybrid_search.search(rewritten, None, top_k=RETRIEVAL_TOP_K)
-    top_chunks = reranker.rerank(question, candidates, top_n=RERANK_TOP_N)
+def _span(trace: Any, name: str, fn, summarize=None):
+    """Execute ``fn`` inside a Langfuse span if tracing is active.
 
-    retrieved_contexts = [_frame_chunk(c) for c in top_chunks if c.get("text")]
-    context = "\n\n---\n\n".join(retrieved_contexts)
+    Mirrors ``QueryPipeline._span`` (pipeline/query_pipeline.py) so an eval trace
+    carries the same per-step latency breakdown a production trace does, instead
+    of a single opaque call with no timing. ``summarize``, if given, converts the
+    result into a small span output (e.g. docnames only) instead of dumping the
+    full result -- avoids duplicating chunk text/embeddings into Langfuse.
+    """
+    if trace is None:
+        return fn()
+    span = trace.span(name=name)
+    try:
+        result = fn()
+        span.end(output=summarize(result) if summarize else None)
+        return result
+    except Exception:
+        span.end(level="ERROR")
+        raise
 
+
+def _docnames(chunks: list[dict]) -> list[str]:
+    """Docnames only, in rank order -- a small span output instead of full chunks."""
+    return [c.get("docname", "") for c in chunks]
+
+
+def _generate_answer(openai_client, question: str, context: str) -> tuple[str, dict[str, int]]:
     response = openai_client.chat.completions.create(
         model=OPENAI_MODEL,
         messages=[
@@ -139,7 +218,60 @@ def _run_question(
         temperature=0.0,
         max_tokens=GENERATION_MAX_TOKENS,
     )
-    answer = response.choices[0].message.content or ""
+    usage = {
+        "input": response.usage.prompt_tokens,
+        "output": response.usage.completion_tokens,
+        "total": response.usage.total_tokens,
+    }
+    return response.choices[0].message.content or "", usage
+
+
+def _run_question(
+    question: str,
+    rewriter,
+    hybrid_search,
+    reranker,
+    openai_client,
+    trace: Any = None,
+) -> tuple[str, list[str]]:
+    """Return (answer, retrieved_contexts) in a single pipeline pass.
+
+    When ``trace`` is given, each step is wrapped in a Langfuse span/generation
+    (same shape as ``QueryPipeline.run``) so the trace records real per-step
+    latency and, via the generation's ``model``/``usage``, a real cost -- a flat
+    trace with only ``input``/``output`` set (the original implementation) always
+    shows 0.00s / $0.00 in the Langfuse UI since there's nothing to compute either
+    from.
+    """
+    rewritten, _vector = _span(trace, "rewrite", lambda: rewriter.rewrite(question))
+
+    candidates = _span(
+        trace,
+        "hybrid_search",
+        lambda: hybrid_search.search(rewritten, None, top_k=RETRIEVAL_TOP_K),
+        summarize=_docnames,
+    )
+    top_chunks = _span(
+        trace,
+        "rerank",
+        lambda: reranker.rerank(question, candidates, top_n=RERANK_TOP_N),
+        summarize=_docnames,
+    )
+
+    retrieved_contexts = [_frame_chunk(c) for c in top_chunks if c.get("text")]
+    context = "\n\n---\n\n".join(retrieved_contexts)
+
+    if trace:
+        gen_span = trace.generation(name="generate", model=OPENAI_MODEL)
+        try:
+            answer, usage = _generate_answer(openai_client, question, context)
+            gen_span.end(output=answer, usage=usage)
+        except Exception:
+            gen_span.end(level="ERROR")
+            raise
+    else:
+        answer, _usage = _generate_answer(openai_client, question, context)
+
     return answer, retrieved_contexts
 
 
@@ -166,8 +298,18 @@ def evaluate(dataset_path: Path, output_path: Path) -> None:
     rewriter, hybrid_search, reranker = _build_components()
     openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
+    run_config = _run_config()
+    langfuse = build_client()
+    run_name = _run_name() if langfuse else None
+    if langfuse:
+        logger.info("Langfuse experiment logging enabled -- run %r", run_name)
+    else:
+        logger.info("LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY not set -- experiment not recorded")
+    traces_by_question: dict[str, Any] = {}
+
     samples: list[SingleTurnSample] = []
     sample_meta: list[dict] = []  # parallel to `samples`: {case_class, expected_fail}
+    sample_questions: list[str] = []  # parallel to `samples` -- for post-RAGAS score lookup
     per_question: list[dict] = []
     refusal_results: list[dict] = []  # {question, case_class, handled}
 
@@ -186,13 +328,29 @@ def evaluate(dataset_path: Path, output_path: Path) -> None:
         is_refusal_case = not reference_contexts
 
         logger.info("[%d/%d] %s", i, len(entries), question[:80])
+
+        trace = None
+        if langfuse:
+            trace = langfuse.trace(
+                name="eval_question",
+                input={"question": question},
+                metadata={"case_class": case_class, "capability": capability},
+            )
+
         try:
             answer, retrieved_contexts = _run_question(
-                question, rewriter, hybrid_search, reranker, openai_client
+                question, rewriter, hybrid_search, reranker, openai_client, trace=trace
             )
         except Exception:
             logger.exception("Pipeline failed for question %d — skipping", i)
+            if trace:
+                trace.update(level="ERROR")
             continue
+
+        if trace:
+            trace.update(output={"answer": answer})
+            traces_by_question[question] = trace
+            _link_dataset_run(langfuse, question, trace, run_name, run_config)
 
         record = {
             "case_class": case_class,
@@ -208,6 +366,13 @@ def evaluate(dataset_path: Path, output_path: Path) -> None:
                 {"question": question, "case_class": case_class, "handled": handled}
             )
             per_question.append({**record, "refusal_case": True, "refusal_handled": handled})
+            if trace:
+                langfuse.score(
+                    trace_id=trace.id,
+                    name="refusal_handled",
+                    value=handled,
+                    data_type="BOOLEAN",
+                )
             continue
 
         # Safety net only — hybrid search over a populated collection should
@@ -222,6 +387,7 @@ def evaluate(dataset_path: Path, output_path: Path) -> None:
             record["expected_fail"] = True
         per_question.append(record)
         sample_meta.append({"case_class": case_class, "expected_fail": expected_fail})
+        sample_questions.append(question)
         samples.append(
             SingleTurnSample(
                 user_input=question,
@@ -243,14 +409,32 @@ def evaluate(dataset_path: Path, output_path: Path) -> None:
 
     if samples:
         logger.info("Running RAGAS on %d samples …", len(samples))
+        from ragas.embeddings import embedding_factory
+        from ragas.llms import llm_factory
+
         ragas_result = ragas_evaluate(
             dataset=EvaluationDataset(samples=samples),
             metrics=[faithfulness, answer_relevancy, context_recall, context_precision],
+            llm=llm_factory(model=_RAGAS_JUDGE_MODEL),
+            embeddings=embedding_factory(model=_RAGAS_JUDGE_EMBEDDING_MODEL),
             raise_exceptions=False,
         )
         df = ragas_result.to_pandas().reset_index(drop=True)
         df["case_class"] = [m["case_class"] for m in sample_meta]
         df["expected_fail"] = [m["expected_fail"] for m in sample_meta]
+
+        if langfuse:
+            for idx, question in enumerate(sample_questions):
+                trace = traces_by_question.get(question)
+                if not trace:
+                    continue
+                row = df.iloc[idx]
+                for col in _RAGAS_COLS:
+                    val = row.get(col)
+                    if val is not None and not (isinstance(val, float) and math.isnan(val)):
+                        langfuse.score(
+                            trace_id=trace.id, name=col, value=float(val), data_type="NUMERIC"
+                        )
 
         # Headline = everything RAGAS scored except the known-limitation cases,
         # which are reported on their own so they don't drag the aggregate.
@@ -276,6 +460,9 @@ def evaluate(dataset_path: Path, output_path: Path) -> None:
         handled = sum(r["handled"] for r in refusal_results)
         metrics["refusal_handled"] = round(handled / len(refusal_results), 4)
 
+    if langfuse:
+        langfuse.flush()
+
     logger.info("Headline metrics: %s", metrics)
     logger.info("By case_class: %s", metrics_by_case_class)
 
@@ -283,7 +470,7 @@ def evaluate(dataset_path: Path, output_path: Path) -> None:
         "timestamp": datetime.now(UTC).isoformat(),
         "dataset": _repo_relative(dataset_path),
         "model": OPENAI_MODEL,
-        "config": _run_config(),
+        "config": run_config,
         "num_questions": len(entries),
         "num_headline": num_headline,
         "num_scored": len(samples),
@@ -294,6 +481,7 @@ def evaluate(dataset_path: Path, output_path: Path) -> None:
         "expected_fail_metrics": expected_fail_metrics,
         "refusal_results": refusal_results,
         "per_question": per_question,
+        "langfuse_run_name": run_name,
     }
     output_path.write_text(json.dumps(output, indent=2, default=str))
     logger.info("Results written to %s", output_path)
@@ -341,6 +529,7 @@ def _run_config() -> dict:
         "generation_model": OPENAI_MODEL,
         "generation_max_tokens": GENERATION_MAX_TOKENS,
         "ragas_judge_model": _RAGAS_JUDGE_MODEL,
+        "ragas_judge_embedding_model": _RAGAS_JUDGE_EMBEDDING_MODEL,
         "embedding_model": EMBEDDING_MODEL,
         "chunk_size": CHUNK_SIZE,
         "chunk_overlap": CHUNK_OVERLAP,
