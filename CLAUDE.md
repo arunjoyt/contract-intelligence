@@ -177,7 +177,9 @@ and `Terms and Conditions` (`on_update_after_submit` covers `allow_on_submit` fi
 `is_signed`, made after submit — see `docs/DEPLOYMENT.md` § Future Enhancements for the fix history).
 The handler: verify `X-Frappe-Webhook-Signature`
 (HMAC-SHA256) → fetch full doc via `ERPNextClient` → `delete_by_docname` → re-run parse → chunk → embed →
-upsert → rebuild BM25 index. No full re-index is needed for routine updates.
+upsert → rebuild BM25 index. No full re-index is needed for routine updates. Both re-indexing paths
+(webhook + full ingest) emit Langfuse traces via `ingestion/tracing.py` — `embed` is a `generation`,
+so ingestion embedding cost is tracked (see `docs/ARCHITECTURE.md` § Observability).
 
 ### Query pipeline order
 

@@ -56,6 +56,10 @@ def mock_erpnext() -> AsyncMock:
 def mock_embedder() -> MagicMock:
     e = MagicMock()
     e.embed_texts.side_effect = lambda texts: [[0.1] * 1536] * len(texts)
+    e.embed_texts_with_usage.side_effect = lambda texts: (
+        [[0.1] * 1536] * len(texts),
+        {"input": 7 * len(texts), "total": 7 * len(texts)},
+    )
     return e
 
 
@@ -83,6 +87,34 @@ def http_client(
         vector_store=mock_vector_store,
         rebuild_bm25=mock_rebuild,
         webhook_secret=WEBHOOK_SECRET,
+    )
+    app.include_router(router, prefix="/webhook")
+    return TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.fixture
+def mock_langfuse() -> MagicMock:
+    lf = MagicMock()
+    lf.trace.return_value = MagicMock()
+    return lf
+
+
+@pytest.fixture
+def traced_http_client(
+    mock_erpnext: AsyncMock,
+    mock_embedder: MagicMock,
+    mock_vector_store: MagicMock,
+    mock_rebuild: MagicMock,
+    mock_langfuse: MagicMock,
+) -> TestClient:
+    app = FastAPI()
+    router = create_webhook_router(
+        erpnext_client=mock_erpnext,
+        embedder=mock_embedder,
+        vector_store=mock_vector_store,
+        rebuild_bm25=mock_rebuild,
+        webhook_secret=WEBHOOK_SECRET,
+        langfuse=mock_langfuse,
     )
     app.include_router(router, prefix="/webhook")
     return TestClient(app, raise_server_exceptions=False)
@@ -572,3 +604,93 @@ def test_upsert_failure_after_delete_propagates_error(
     mock_vector_store.delete_by_docname.assert_called_once_with("CON-001")
     # error must propagate as 5xx, not be swallowed as a 200 "indexed"
     assert response.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# Langfuse tracing (issue #123)
+# ---------------------------------------------------------------------------
+
+
+def test_no_trace_created_without_langfuse(
+    http_client: TestClient, mock_erpnext: AsyncMock
+) -> None:
+    """The default wiring passes no Langfuse client — indexing still works and
+    nothing tries to trace."""
+    mock_erpnext.get_doc.side_effect = [CONTRACT_DOC, CONTRACT_SUPPLIER_DOC]
+    response = _post(http_client, {"doctype": "Contract", "docname": "CON-001"})
+    assert response.json()["status"] == "indexed"
+
+
+def test_indexed_webhook_creates_trace_with_step_spans(
+    traced_http_client: TestClient,
+    mock_erpnext: AsyncMock,
+    mock_langfuse: MagicMock,
+) -> None:
+    mock_erpnext.get_doc.side_effect = [CONTRACT_DOC, CONTRACT_SUPPLIER_DOC]
+
+    _post(traced_http_client, {"doctype": "Contract", "docname": "CON-001"})
+
+    mock_langfuse.trace.assert_called_once_with(
+        name="webhook_reindex", input={"doctype": "Contract", "docname": "CON-001"}
+    )
+    trace = mock_langfuse.trace.return_value
+    span_names = {c.kwargs["name"] for c in trace.span.call_args_list}
+    assert span_names == {"fetch", "parse", "chunk", "upsert"}
+    trace.update.assert_called_with(output={"status": "indexed", "chunk_count": 1})
+
+
+def test_embed_step_is_traced_as_generation_with_usage(
+    traced_http_client: TestClient,
+    mock_erpnext: AsyncMock,
+    mock_langfuse: MagicMock,
+) -> None:
+    """The embed step must be a Langfuse `generation` (model + token usage), so
+    ingestion embedding cost is captured the way query-time generation cost is."""
+    mock_erpnext.get_doc.side_effect = [CONTRACT_DOC, CONTRACT_SUPPLIER_DOC]
+
+    _post(traced_http_client, {"doctype": "Contract", "docname": "CON-001"})
+
+    trace = mock_langfuse.trace.return_value
+    trace.generation.assert_called_once_with(name="embed", model="text-embedding-3-small")
+    gen = trace.generation.return_value
+    assert gen.end.call_args.kwargs["usage"] == {"input": 7, "total": 7}
+
+
+def test_skipped_webhook_updates_trace_output(
+    traced_http_client: TestClient,
+    mock_erpnext: AsyncMock,
+    mock_langfuse: MagicMock,
+) -> None:
+    empty_contract = {**CONTRACT_DOC, "contract_terms": ""}
+    mock_erpnext.get_doc.side_effect = [empty_contract, CONTRACT_SUPPLIER_DOC]
+
+    _post(traced_http_client, {"doctype": "Contract", "docname": "CON-001"})
+
+    trace = mock_langfuse.trace.return_value
+    trace.update.assert_called_with(output={"status": "skipped", "reason": "empty text"})
+    trace.generation.assert_not_called()
+
+
+def test_ignored_doctype_creates_no_trace(
+    traced_http_client: TestClient, mock_langfuse: MagicMock
+) -> None:
+    _post(traced_http_client, {"doctype": "Sales Order", "docname": "SO-001"})
+    mock_langfuse.trace.assert_not_called()
+
+
+def test_failed_webhook_records_error_on_trace_and_failing_span(
+    traced_http_client: TestClient,
+    mock_erpnext: AsyncMock,
+    mock_vector_store: MagicMock,
+    mock_langfuse: MagicMock,
+) -> None:
+    mock_erpnext.get_doc.side_effect = [CONTRACT_DOC, CONTRACT_SUPPLIER_DOC]
+    mock_vector_store.upsert_chunks.side_effect = RuntimeError("Qdrant down")
+
+    response = _post(traced_http_client, {"doctype": "Contract", "docname": "CON-001"})
+
+    assert response.status_code == 500
+    trace = mock_langfuse.trace.return_value
+    # traces have no `level`; the root records an error status, the span carries ERROR
+    trace.update.assert_called_with(output={"status": "error", "error": "RuntimeError"})
+    trace.span.return_value.end.assert_any_call(level="ERROR")

@@ -24,7 +24,7 @@ import json
 import logging
 import os
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -32,7 +32,11 @@ from ingestion.chunker import Chunk, chunk_text
 from ingestion.document_parser import extract_text_from_html, extract_text_from_pdf
 from ingestion.embedder import Embedder
 from ingestion.erpnext_client import ERPNextClient
+from ingestion.tracing import span, traced_embed
 from retrieval.vector_store import VectorStore
+
+if TYPE_CHECKING:
+    from langfuse import Langfuse
 
 logger = logging.getLogger(__name__)
 
@@ -51,12 +55,18 @@ async def handle_webhook_request(
     vector_store: VectorStore,
     rebuild_bm25: Callable[[], None],
     webhook_secret: str,
+    langfuse: Langfuse | None = None,
 ) -> dict[str, str]:
     """Process a single ERPNext webhook request.
 
     Verifies the HMAC signature, fetches and re-indexes the document.
     Called by both ``create_webhook_router`` (test-friendly factory) and
     ``api/main.py`` (which registers the route at module level).
+
+    When ``langfuse`` is provided, the fetch -> parse -> chunk -> embed -> upsert
+    path is recorded as one ``webhook_reindex`` trace with a child span per step
+    (``embed`` is a ``generation``, so its token cost is captured) -- see issue
+    #123.
     """
     body = await request.body()
     _verify_signature(body, request.headers.get("X-Frappe-Webhook-Signature", ""), webhook_secret)
@@ -69,27 +79,55 @@ async def handle_webhook_request(
     if doctype not in SUPPORTED_DOCTYPES:
         return {"status": "ignored", "doctype": doctype}
 
-    doc = await erpnext_client.get_doc(doctype, docname)
-    supplier_group = await resolve_supplier_group(doctype, doc, erpnext_client)
+    trace = (
+        langfuse.trace(name="webhook_reindex", input={"doctype": doctype, "docname": docname})
+        if langfuse
+        else None
+    )
 
-    text, metadata, force_single = prepare_doc_for_indexing(doctype, doc, supplier_group)
-    chunks = await gather_chunks_for_doc(doctype, doc, text, force_single, erpnext_client)
+    try:
+        with span(trace, "fetch"):
+            doc = await erpnext_client.get_doc(doctype, docname)
+            supplier_group = await resolve_supplier_group(doctype, doc, erpnext_client)
 
-    if not chunks:
-        return {"status": "skipped", "docname": docname, "reason": "empty text"}
+        with span(trace, "parse"):
+            text, metadata, force_single = prepare_doc_for_indexing(doctype, doc, supplier_group)
 
-    vectors = embedder.embed_texts([c["text"] for c in chunks])
+        with span(trace, "chunk") as chunk_span:
+            chunks = await gather_chunks_for_doc(
+                doctype, doc, text, force_single, erpnext_client
+            )
+            if chunk_span:
+                chunk_span.update(output={"chunk_count": len(chunks)})
 
-    enriched = [
-        {**chunk, **metadata, "vector": vector}
-        for chunk, vector in zip(chunks, vectors, strict=True)
-    ]
+        if not chunks:
+            if trace:
+                trace.update(output={"status": "skipped", "reason": "empty text"})
+            return {"status": "skipped", "docname": docname, "reason": "empty text"}
 
-    vector_store.delete_by_docname(docname)
-    vector_store.upsert_chunks(enriched)
-    rebuild_bm25()
+        vectors = traced_embed(trace, embedder, [c["text"] for c in chunks])
 
-    return {"status": "indexed", "docname": docname}
+        enriched = [
+            {**chunk, **metadata, "vector": vector}
+            for chunk, vector in zip(chunks, vectors, strict=True)
+        ]
+
+        with span(trace, "upsert"):
+            vector_store.delete_by_docname(docname)
+            vector_store.upsert_chunks(enriched)
+
+        rebuild_bm25()
+
+        if trace:
+            trace.update(output={"status": "indexed", "chunk_count": len(chunks)})
+        return {"status": "indexed", "docname": docname}
+    except Exception as exc:
+        # Langfuse traces carry no `level` field (only observations do), so the
+        # failing step's span is the ERROR signal; the root just records that it
+        # ended badly and on which step.
+        if trace:
+            trace.update(output={"status": "error", "error": type(exc).__name__})
+        raise
 
 
 def create_webhook_router(
@@ -98,6 +136,7 @@ def create_webhook_router(
     vector_store: VectorStore,
     rebuild_bm25: Callable[[], None],
     webhook_secret: str | None = None,
+    langfuse: Langfuse | None = None,
 ) -> APIRouter:
     """Return an APIRouter with POST /erpnext wired to the given dependencies.
 
@@ -116,6 +155,7 @@ def create_webhook_router(
             vector_store=vector_store,
             rebuild_bm25=rebuild_bm25,
             webhook_secret=_secret,
+            langfuse=langfuse,
         )
 
     return router

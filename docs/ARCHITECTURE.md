@@ -243,6 +243,8 @@ Metadata filters (supplier, doctype, status) are applied to **both** legs of the
 
 ## Observability
 
+### Query trace
+
 Every query creates a Langfuse trace with the following child observations:
 
 | Observation | Type | Input captured | Output captured |
@@ -253,11 +255,27 @@ Every query creates a Langfuse trace with the following child observations:
 | `rerank` | span | original question + 20 candidates | top-5 re-scored chunks |
 | `generate` | generation | original question + context string | answer with `[docname]` citations |
 
-The trace root carries `input.question` and `output.{answer, source_count}`. If any step raises, the failing span and the root trace are both updated with `level="ERROR"`.
+The trace root carries `input.question` and `output.{answer, source_count}`. If any step raises, the failing span is ended with `level="ERROR"` (the root `trace.update(level=...)` call is a historical no-op — Langfuse traces have no `level` field, only observations do).
 
 `generate` is a Langfuse **generation** (not a plain span) — it's created with `trace.generation(model=OPENAI_MODEL)` and passes `usage={"input", "output", "total"}` (from the OpenAI response's `.usage`) to `end()`. Only `generation`-type observations get token counts and cost auto-computed by Langfuse; a plain span just stores whatever input/output you hand it (see PR [#87](https://github.com/arunjoyt/contract-intelligence/pull/87), issue #81).
 
-**Not traced: embedding calls.** `ingestion/embedder.py`'s `Embedder` (used both for HyDE query embedding at query time and for chunk embedding during ingestion) is intentionally left trace-agnostic — it has no Langfuse dependency and isn't passed a trace/span object by any caller. Wiring it in would mean threading trace context through the ingestion path (full ingest, webhook re-index) as well as the query path, for comparatively little signal: embedding cost (`text-embedding-3-small`) is negligible next to GPT-4o generation cost. Revisit if embedding volume or cost grows enough to matter.
+### Ingestion traces
+
+Both re-indexing paths are traced the same way (issue [#123](https://github.com/arunjoyt/contract-intelligence/issues/123)). The shared helpers live in `ingestion/tracing.py` (`span()` context manager + `traced_embed()`), and every helper no-ops when no Langfuse client is wired in, so ingestion runs unchanged without credentials.
+
+**`webhook_reindex`** — one trace per `POST /webhook/erpnext` call that hits a supported doctype (ignored doctypes create no trace). Root `input` is `{doctype, docname}`; root `output` is `{status, chunk_count}` (or `{status: "skipped", reason}`, or `{status: "error", error}` on a failure). Langfuse traces carry no `level` field — only observations do — so on a failure the ERROR signal is on the span for the step that raised; the root `output.status` is the coarse marker.
+
+| Observation | Type | Notes |
+|---|---|---|
+| `fetch` | span | `get_doc` + Supplier-group join |
+| `parse` | span | HTML strip + struct→NL serialization |
+| `chunk` | span | split + PDF-attachment extraction; `output.chunk_count` |
+| `embed` | generation | `model=EMBEDDING_MODEL`, `usage={"input", "total"}` from the embeddings API |
+| `upsert` | span | `delete_by_docname` + `upsert_chunks` |
+
+**`full_ingest`** — one trace per `POST /ingest/full` run. A `list:<doctype>` span wraps each ERPNext listing call (so a run that indexes nothing because the listing failed shows the ERROR span, not just a bare `0/0` output), then each document gets one `<doctype>:<docname>` span containing its own `embed` generation, so per-document latency and cost are both visible. Root `output` is `{documents_indexed, chunks_indexed}`. A single document (or one doctype's listing) failing is logged and its span marked `ERROR`, but the run continues and its trace is not marked — one bad doc is not a failed ingest.
+
+The embeddings API reports no `completion_tokens`, so the `embed` generation's `usage` has no `"output"` key — this is the first place ingestion embedding cost (`text-embedding-3-small`) shows up in Langfuse; before #123 it was untracked on both paths.
 
 The Langfuse UI is accessible at `http://localhost:3000` (default docker-compose port).
 
@@ -274,6 +292,10 @@ The Langfuse UI is accessible at `http://localhost:3000` (default docker-compose
    - `generate` shows non-zero `Total tokens` and a computed cost (it's a `generation`, not a plain span)
    - Root trace `output.answer` is non-empty and contains at least one `[docname]`-style citation
    - On a forced error, `level` is `ERROR` on the failing span and propagates to the root trace
+6. Trigger an ingestion path and check its trace:
+   - Edit a Contract in ERPNext (or `curl -X POST .../ingest/full -H "X-Admin-Secret: ..."`) and refresh **Traces**
+   - A `webhook_reindex` trace (or `full_ingest`) appears with `fetch` / `parse` / `chunk` / `embed` / `upsert` observations
+   - `embed` is a `generation` with non-zero `Total tokens` and a computed cost
 
 ### Future Enhancements — production quality monitoring (not implemented)
 

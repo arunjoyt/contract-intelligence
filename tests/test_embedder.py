@@ -7,9 +7,13 @@ import pytest
 from ingestion.embedder import EMBEDDING_MODEL, Embedder
 
 
-def _fake_response(vectors: list[list[float]]) -> MagicMock:
+def _fake_response(
+    vectors: list[list[float]], prompt_tokens: int = 0
+) -> MagicMock:
     response = MagicMock()
     response.data = [MagicMock(embedding=v) for v in vectors]
+    response.usage.prompt_tokens = prompt_tokens
+    response.usage.total_tokens = prompt_tokens
     return response
 
 
@@ -80,3 +84,34 @@ def test_constructor_falls_back_to_env_var(monkeypatch: pytest.MonkeyPatch) -> N
 def test_constructor_uses_custom_model() -> None:
     embedder = Embedder(api_key="sk-test", model="text-embedding-3-large")
     assert embedder._model == "text-embedding-3-large"
+
+
+def test_embed_texts_with_usage_returns_vectors_and_token_usage(embedder: Embedder) -> None:
+    embedder._client.embeddings.create.return_value = _fake_response(
+        [[0.1, 0.2], [0.3, 0.4]], prompt_tokens=42
+    )
+
+    vectors, usage = embedder.embed_texts_with_usage(["a", "b"])
+
+    assert vectors == [[0.1, 0.2], [0.3, 0.4]]
+    assert usage == {"input": 42, "total": 42}
+
+
+def test_embed_texts_with_usage_sums_tokens_across_batches(embedder: Embedder) -> None:
+    def fake_create(model: str, input: list[str]) -> MagicMock:  # noqa: A002
+        return _fake_response([[float(i)] for i in range(len(input))], prompt_tokens=len(input))
+
+    embedder._client.embeddings.create.side_effect = fake_create
+
+    vectors, usage = embedder.embed_texts_with_usage([f"t-{i}" for i in range(2500)])
+
+    assert len(vectors) == 2500
+    assert usage == {"input": 2500, "total": 2500}
+
+
+def test_embed_texts_with_usage_empty_list_does_not_call_api(embedder: Embedder) -> None:
+    vectors, usage = embedder.embed_texts_with_usage([])
+
+    assert vectors == []
+    assert usage == {"input": 0, "total": 0}
+    embedder._client.embeddings.create.assert_not_called()

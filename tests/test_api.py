@@ -301,6 +301,100 @@ def test_ingest_full_with_correct_secret_returns_202(client):
 
 
 # ---------------------------------------------------------------------------
+# Full-ingest Langfuse tracing (issue #123)
+# ---------------------------------------------------------------------------
+
+
+async def test_run_full_ingest_traces_per_doc_span_and_embed_generation(monkeypatch):
+    from api.main import _run_full_ingest
+
+    contract = {
+        "name": "CON-001",
+        "party_name": "Acme",
+        "contract_terms": "<p>Net 30 payment terms.</p>",
+        "status": "Active",
+    }
+
+    ec = AsyncMock()
+    ec.__aenter__.return_value = ec
+    ec.__aexit__.return_value = None
+    ec.get_list.side_effect = lambda doctype, limit=0: (
+        [{"name": "CON-001"}] if doctype == "Contract" else []
+    )
+    ec.get_doc.side_effect = [contract, {"supplier_group": "Trade"}]
+    ec.get_attached_files.return_value = []
+    monkeypatch.setattr("api.main.ERPNextClient", lambda: ec)
+
+    embedder = MagicMock()
+    embedder.embed_texts_with_usage.return_value = ([[0.1] * 1536], {"input": 12, "total": 12})
+    vector_store = MagicMock()
+    hybrid_search = MagicMock()
+
+    lf = MagicMock()
+    trace = lf.trace.return_value
+
+    await _run_full_ingest(embedder, vector_store, hybrid_search, lf)
+
+    lf.trace.assert_called_once_with(name="full_ingest")
+    span_names = [c.kwargs["name"] for c in trace.span.call_args_list]
+    assert "list:Contract" in span_names
+    assert "Contract:CON-001" in span_names
+    trace.generation.assert_called_once_with(name="embed", model="text-embedding-3-small")
+    trace.generation.return_value.end.assert_called_once_with(usage={"input": 12, "total": 12})
+    trace.update.assert_called_once_with(
+        output={"documents_indexed": 1, "chunks_indexed": 1}
+    )
+
+
+async def test_run_full_ingest_traces_listing_failure(monkeypatch):
+    from api.main import _run_full_ingest
+
+    ec = AsyncMock()
+    ec.__aenter__.return_value = ec
+    ec.__aexit__.return_value = None
+    ec.get_list.side_effect = RuntimeError("ERPNext 503")
+    monkeypatch.setattr("api.main.ERPNextClient", lambda: ec)
+
+    lf = MagicMock()
+    trace = lf.trace.return_value
+
+    await _run_full_ingest(MagicMock(), MagicMock(), MagicMock(), lf)
+
+    # every listing failed -> a per-doctype ERROR span, and a 0/0 run output
+    trace.span.return_value.end.assert_any_call(level="ERROR")
+    trace.update.assert_called_once_with(
+        output={"documents_indexed": 0, "chunks_indexed": 0}
+    )
+
+
+async def test_run_full_ingest_without_langfuse_still_indexes(monkeypatch):
+    from api.main import _run_full_ingest
+
+    ec = AsyncMock()
+    ec.__aenter__.return_value = ec
+    ec.__aexit__.return_value = None
+    ec.get_list.side_effect = lambda doctype, limit=0: (
+        [{"name": "CON-001"}] if doctype == "Contract" else []
+    )
+    ec.get_doc.side_effect = [
+        {"name": "CON-001", "party_name": "Acme", "contract_terms": "<p>Terms.</p>"},
+        {"supplier_group": "Trade"},
+    ]
+    ec.get_attached_files.return_value = []
+    monkeypatch.setattr("api.main.ERPNextClient", lambda: ec)
+
+    embedder = MagicMock()
+    embedder.embed_texts.return_value = [[0.1] * 1536]
+    vector_store = MagicMock()
+    hybrid_search = MagicMock()
+
+    await _run_full_ingest(embedder, vector_store, hybrid_search)
+
+    vector_store.upsert_chunks.assert_called_once()
+    embedder.embed_texts.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
 # /webhook/erpnext
 # ---------------------------------------------------------------------------
 

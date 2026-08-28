@@ -27,15 +27,32 @@ class Embedder:
 
         Returns embeddings in the same order as `texts`.
         """
+        return self.embed_texts_with_usage(texts)[0]
+
+    def embed_texts_with_usage(
+        self, texts: list[str]
+    ) -> tuple[list[list[float]], dict[str, int]]:
+        """Like `embed_texts`, but also return token usage summed across every
+        batch call as ``{"input", "total"}``.
+
+        Used by the ingestion tracing path (`ingestion/tracing.traced_embed`) to
+        record the embed step as a Langfuse `generation`, the same way
+        `query_pipeline` records `generate` -- so ingestion embedding cost shows
+        up in Langfuse. The embeddings API reports no `completion_tokens`, so
+        there is no `"output"` key.
+        """
         if not texts:
-            return []
+            return [], {"input": 0, "total": 0}
 
         embeddings: list[list[float]] = []
+        usage = {"input": 0, "total": 0}
         for start in range(0, len(texts), MAX_BATCH_SIZE):
             batch = texts[start : start + MAX_BATCH_SIZE]
             response = self._client.embeddings.create(model=self._model, input=batch)
             embeddings.extend(item.embedding for item in response.data)
-        return embeddings
+            usage["input"] += response.usage.prompt_tokens
+            usage["total"] += response.usage.total_tokens
+        return embeddings, usage
 
     def embed_query(self, text: str) -> list[float]:
         """Embed a single query string."""
