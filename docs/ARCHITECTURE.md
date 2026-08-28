@@ -54,6 +54,18 @@ the pipeline a top-5. See "Query Pipeline — Step by Step" below.
 5. **Generation** — GPT-4o receives the top-5 chunks as context with a structured prompt that requires source citations.
 6. **Tracing** — each step is a Langfuse child span; the full trace is linked to the question.
 
+### Orchestration — straight-line Python, not LangGraph
+
+The five steps run as a fixed linear sequence of method calls in `pipeline/query_pipeline.py` —
+control flow never branches or loops. A LangGraph `StateGraph` was evaluated (#114) and **deferred**
+(ADR [0002](adr/0002-no-langchain-framework.md)): for a pipeline with no cycles, no conditional
+edges, and no per-thread state, a graph is pure overhead over method calls, and routing the
+hand-rolled Langfuse spans (with their `summarize` trimming that keeps chunk text and embeddings out
+of trace storage) through LangGraph's callback layer is a rewrite with regression risk and no gain.
+Revisit when the pipeline first needs runtime-dependent control flow — multi-turn state for #34,
+self-corrective retrieval loops (CRAG / Self-RAG), or an explicit "answer not in context" branch
+that skips generation.
+
 ### Known Limitations — aggregation/enumeration queries
 
 This pipeline is scoped to passage-grounded Q&A: retrieval is always top-20 hybrid search reranked to

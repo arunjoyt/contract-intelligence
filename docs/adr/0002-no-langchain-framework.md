@@ -61,7 +61,14 @@ Where a LangChain capability is actually needed, hand-roll a minimal seam scoped
 ### Adjacent packages
 
 - **LangGraph** — stateful graph orchestration (loops, checkpointing, conditional edges). Real
-  value, but only once control flow stops being linear. See #114.
+  value, but only once control flow stops being linear. See #114, which weighed three options:
+  defer (chosen), adopt now as a replacement (rejected — highest cost, no functional gain while
+  the pipeline is linear), and adopt now as a *parallel* implementation behind a config flag to
+  de-risk the later migration (also rejected). The parallel-implementation cost is almost entirely
+  porting the hand-rolled Langfuse spans — with their `summarize` trimming — onto LangGraph's
+  callback layer, and that cost is the same whenever it's paid; doing it now just means carrying a
+  second, unused orchestration path and its dependency surface (`langgraph`,
+  `langgraph-checkpoint-*`) until a trigger arrives.
 - **LangSmith** — hosted tracing / eval / prompt management. Overlaps with the existing Langfuse
   setup; no reason to run both.
 - **LangServe** — serve a chain as a FastAPI route. `api/main.py` already exists.
