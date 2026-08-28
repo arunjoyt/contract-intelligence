@@ -443,26 +443,34 @@ Run with `pytest tests/ -v`. No network. Required to pass in CI on every push.
 
 ### Layer 2 — Backend integration tests (`tests/test_integration.py`)
 
-Nine groups that hit real services. Gated by `RUN_E2E=1` → `RUN_INTEGRATION=1`. Covers the full backend stack: ERPNext REST → ingestion → Qdrant → retrieval → pipeline → GPT-4o → Langfuse tracing. Streamlit is checked only with `httpx.get` → HTTP 200. Not in CI.
+Nine groups that hit real services. Gated by `RUN_INTEGRATION=1`. Covers the full backend stack: ERPNext REST → ingestion → Qdrant → retrieval → pipeline → GPT-4o → Langfuse tracing. Streamlit is checked only with `httpx.get` → HTTP 200. Not in CI.
 
 ERPNext is driven via **REST API** (`frappe.client.submit`, `frappe.client.save`) — this does not exercise the Frappe background worker queue that fires webhooks in the real Desk path.
 
-### Layer 3 — E2E Desk UI tests (`tests/e2e/`, Playwright) — planned, not yet implemented
+### Layer 3 — Full-loop E2E tests (`tests/e2e/`, Playwright) — implemented, run live
 
-Playwright drives the **ERPNext Desk UI in a real Chromium browser**, exercising the same code path a user takes. This layer exists to catch a class of bugs that REST-API integration tests cannot:
+Playwright drives the **ERPNext Desk UI and the real Streamlit UI in a real Chromium browser**, exercising the same paths a user takes. This layer exists to catch a class of bugs that REST-API integration tests cannot — and a live `RUN_E2E=1` run against this project's dev ERPNext site (2026-07-23) found two real, previously-unknown gaps purely by actually running it:
 
-**Three bugs found only via Desk UI:**
-1. Webhook records not configured in ERPNext.
+**Bugs found only via a real browser:**
+1. Webhook record not configured in ERPNext — `terms-on-update` was missing. **Fixed**: created the record (matching the other three exactly) and verified functionally — a disposable Terms and Conditions document's update landed in Qdrant within 3 seconds.
 2. Webhooks configured but not firing (URL wrong, disabled, worker queue not running).
-3. `on_update_after_submit` event not triggering a webhook after a desk save on a submitted PO.
+3. `on_update` not firing on a Desk save to an already-submitted Contract — confirmed live via Frappe's own Webhook Request Log (zero delivery attempts, not a failed one). Contract's `is_signed` field is `allow_on_submit`, so toggling it via the Desk UI is a legal edit that should, but doesn't, re-index. This one is a Frappe 15 platform limitation, not fixable in this codebase.
 
-Planned test files and what each catches:
+**Design principle — full-loop over isolated checks.** Earlier revisions had separate files that stopped at a raw Qdrant `points/scroll` call (does the point exist?) instead of the user-observable outcome (can a real person get this answer through the UI?). Those were consolidated into `test_erpnext_to_streamlit_loop.py`: each test drives the real ERPNext **Desk UI** for the action under test (REST bypasses the webhook-firing worker queue — exactly the bug class this suite exists to catch), then verifies the result by asking about it through the real Streamlit browser UI instead of querying Qdrant directly. `test_webhook_config.py` (static config, no ERPNext data) and `test_erpnext_desk_update_after_submit.py` (needs Frappe's exact Webhook Request Log and Qdrant payload values to conclusively prove the confirmed gap above) stay separate on purpose — routing either through an LLM-composed UI answer would trade away the precision that makes them work.
 
-| File | Browser? | Catches |
-|---|---|---|
-| `test_webhook_config.py` | No (REST) | Missing / misconfigured webhook records |
-| `test_erpnext_desk_submit.py` | Yes | Webhook not firing on Desk submit |
-| `test_erpnext_desk_update_after_submit.py` | Yes | `on_update_after_submit` gap |
-| `test_erpnext_desk_cancel.py` | Yes | Cancel not propagating to Qdrant removal |
+One thing full-loop tests must get right: BM25 only indexes chunk **text**, not `docname` (see `retrieval/hybrid_search.py`), so a bare docname-anchored question has no lexical anchor into a corpus of dozens of other, more topically-rich contracts and reliably fails retrieval — found live while building the cancel-status test. Planting the distinctive fact directly in the chunk text (not just referencing the docname in the question) fixes this.
 
-Streamlit UI is tested separately via `streamlit.testing.v1.AppTest` (in-process, no browser). See `docs/IMPLEMENTATION_PLAN.md` Step 17 for the full implementation plan.
+Test files, what each catches, and the live result (gated by `RUN_E2E=1`):
+
+| File | Browser? | Catches | Live result |
+|---|---|---|---|
+| `test_webhook_config.py` | No (REST) | Missing / misconfigured webhook records | 5 passed (fixed: created the missing `terms-on-update` record) |
+| `test_erpnext_desk_update_after_submit.py` | Yes | Post-submit Desk save not re-indexing | 1 xfailed (confirmed platform gap), 1 passed |
+| `test_erpnext_to_streamlit_loop.py` | Yes | Desk action (submit / submit+PDF / cancel) not reaching the real Streamlit UI | 3 passed |
+| `test_streamlit_sidebar_filters.py` | Yes | Sidebar filter widgets breaking the query flow | 1 passed |
+
+Three stale pre-rebrand webhooks (`po-*`, `scorecard-on-update`) are also still present on this site; harmless (ignored by `SUPPORTED_DOCTYPES`) but not yet cleaned up — a separate, optional follow-up. The post-submit-edit gap is `xfail(strict=True)`, documenting it as a known Frappe 15 platform limitation (see `docs/DEPLOYMENT.md` § Future Enhancements) rather than leaving it as an unexplained red test — `strict=True` means a future Frappe fix would flip it to a loud XPASS failure instead of silently staying green.
+
+`test_erpnext_to_streamlit_loop.py` drives a real Desk UI action, then a real running Streamlit server through a second real Chromium browser tab against the real FastAPI backend — nothing mocked, the complete browser → Desk UI → webhook → Qdrant → browser → Streamlit → FastAPI → pipeline → OpenAI → browser round trip. Login to Streamlit is bypassed by minting a JWT directly (`api.auth.jwt_handler.mint_token`, what `/auth/callback` calls after a real OAuth exchange) via `mint_test_jwt`, rather than driving ERPNext's OAuth consent screen through the browser a second time. `test_streamlit_sidebar_filters.py` covers what the full-loop tests don't — filter widget interaction against pre-existing demo data — and is a different, complementary layer from the always-on `tests/test_streamlit.py` below: that one verifies UI *logic* fast and in-process with `httpx.post` mocked; these verify the UI actually *renders and works* end-to-end.
+
+Streamlit UI also has a separate, always-on layer tested via `streamlit.testing.v1.AppTest` (in-process, no browser, no running server, **not** gated by `RUN_E2E` — runs in the normal `pytest tests/` unit suite) — `tests/test_streamlit.py`, implemented and passing. See `docs/IMPLEMENTATION_PLAN.md` Step 17 for the full test breakdown.
