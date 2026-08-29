@@ -40,6 +40,12 @@ Thumbs.db
 *.bin
 *.pt
 evaluation/results.json
+evaluation/candidates.review.json
+# Per-client eval artifacts never enter this repo (#118) — datasets, run outputs, generator
+# candidates all live under evaluation/client/. The demo fixtures test_dataset.json /
+# results.baseline.json stay committed (synthetic data, no real client in them).
+evaluation/client/*
+!evaluation/client/README.md
 
 # Integration test results (scripts/run_integration.sh)
 test-results/

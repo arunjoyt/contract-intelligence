@@ -20,7 +20,12 @@ before either way, and evaluate.py works with no Langfuse credentials at all.
 Usage
 -----
     python evaluation/push_dataset.py   # once, and after editing test_dataset.json
-    python evaluation/evaluate.py [--dataset PATH] [--output PATH]
+    python evaluation/evaluate.py [--dataset PATH] [--output PATH] [--split dev|test|all]
+
+The dataset carries a dev/test ``split`` on every entry (#112). Tune knobs and
+iterate the prompt against ``--split dev``; freeze ``results.baseline.json``
+against ``--split test`` only, so methodology work never overfits the numbers it
+is judged on. ``--split all`` (the default) scores every entry.
 """
 
 from __future__ import annotations
@@ -286,7 +291,37 @@ def _run_question(
 # ---------------------------------------------------------------------------
 
 
-def evaluate(dataset_path: Path, output_path: Path) -> None:
+_VALID_SPLITS = ("dev", "test", "all")
+
+
+def _filter_by_split(entries: list[dict], split: str) -> list[dict]:
+    """Keep only entries whose ``split`` matches (``all`` keeps everything).
+
+    Every entry is expected to carry a ``split`` of ``"dev"`` or ``"test"`` (#112).
+    An entry missing the field is kept under ``--split all`` but dropped (with a
+    warning) under ``dev`` / ``test`` — a partly-labelled dataset scores a
+    predictable subset instead of silently reporting on the wrong N.
+    """
+    if split == "all":
+        return entries
+    kept, unlabelled = [], 0
+    for entry in entries:
+        entry_split = entry.get("split")
+        if entry_split is None:
+            unlabelled += 1
+        elif entry_split == split:
+            kept.append(entry)
+    if unlabelled:
+        logger.warning(
+            "%d %s no 'split' field — excluded from --split %s",
+            unlabelled,
+            "entry has" if unlabelled == 1 else "entries have",
+            split,
+        )
+    return kept
+
+
+def evaluate(dataset_path: Path, output_path: Path, split: str = "all") -> None:
     from openai import OpenAI
     from ragas import EvaluationDataset
     from ragas import evaluate as ragas_evaluate
@@ -298,8 +333,18 @@ def evaluate(dataset_path: Path, output_path: Path) -> None:
         faithfulness,
     )
 
-    entries: list[dict] = json.loads(dataset_path.read_text())
-    logger.info("Loaded %d entries from %s", len(entries), dataset_path)
+    all_entries: list[dict] = json.loads(dataset_path.read_text())
+    entries = _filter_by_split(all_entries, split)
+    logger.info(
+        "Loaded %d entries from %s (%d after --split %s)",
+        len(all_entries),
+        dataset_path,
+        len(entries),
+        split,
+    )
+    if not entries:
+        logger.error("No entries match --split %s — aborting", split)
+        sys.exit(1)
 
     rewriter, hybrid_search, reranker = _build_components()
     openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
@@ -475,6 +520,7 @@ def evaluate(dataset_path: Path, output_path: Path) -> None:
     output = {
         "timestamp": datetime.now(UTC).isoformat(),
         "dataset": _repo_relative(dataset_path),
+        "split": split,
         "model": OPENAI_MODEL,
         "config": run_config,
         "num_questions": len(entries),
@@ -585,13 +631,22 @@ def main() -> None:
         default=_DEFAULT_OUTPUT,
         help="Path for results.json (default: evaluation/results.json)",
     )
+    parser.add_argument(
+        "--split",
+        choices=_VALID_SPLITS,
+        default="all",
+        help=(
+            "Which dev/test split to score (default: all). Tune against 'dev'; "
+            "freeze results.baseline.json against 'test'."
+        ),
+    )
     args = parser.parse_args()
 
     if not args.dataset.exists():
         logger.error("Dataset not found: %s", args.dataset)
         sys.exit(1)
 
-    evaluate(args.dataset, args.output)
+    evaluate(args.dataset, args.output, args.split)
 
 
 if __name__ == "__main__":

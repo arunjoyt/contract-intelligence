@@ -222,9 +222,10 @@ Allowed roles in both options: `Purchase Manager`, `Purchase User`, `Accounts Us
 GitHub Actions (`.github/workflows/ci.yml`): `ruff check .` and `pytest tests/` on every
 push (tests run with no network — OpenAI and Qdrant are mocked). That's the whole CI surface.
 
-RAGAS evaluation is **not** in CI — it's a manual local run (`python evaluation/evaluate.py`)
-against a populated Qdrant collection. `evaluation/results.baseline.json` is the committed
-reference; refresh it deliberately (and in the same PR) when a pipeline change is meant to move
-the numbers. See `docs/ARCHITECTURE.md` § Evaluation. A judge-based score on ~17 headline
-questions is too noisy to gate on; revisit an automated gate only once the dataset is
-substantially larger.
+RAGAS evaluation is **not** in CI — it's a manual local run (`python evaluation/evaluate.py`,
+`--split dev|test|all`) against a populated Qdrant collection. `evaluation/results.baseline.json`
+is the committed reference (frozen against `--split test`); refresh it deliberately (and in the
+same PR) when a pipeline change is meant to move the numbers. See `docs/ARCHITECTURE.md` §
+Evaluation. The dataset is 92 entries with a dev/test split (#112); an automated gate stays off
+the table regardless — the LLM judge is too noisy to threshold, and re-ingest-only changes
+(chunking, parsing) never show up in it.

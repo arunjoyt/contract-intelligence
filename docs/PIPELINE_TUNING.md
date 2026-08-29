@@ -3,8 +3,10 @@
 How the retrieval and generation knobs would be tuned properly. Right now they all
 hold conventional "retrieve wide, rerank narrow" defaults — **not values tuned on
 this corpus.** The eval harness that could tune them (`evaluation/evaluate.py`,
-per-`case_class` slicing) exists as of #102, but the dataset is still 2–4 questions
-per slice — too small to move a knob without fitting to noise.
+per-`case_class` slicing) exists as of #102; #112 grew the dataset to 92 entries
+with a dev/test split. That is enough to tune the generation-side knobs on the
+judge headline, but the ~38-clause demo corpus is too small to tune the
+retrieval-only knobs at all — see [the corpus-size ceiling](#the-corpus-size-ceiling--what-113-can-and-cannot-tune-here).
 
 This doc walks the whole pipeline order: ingest → embed → rewrite → retrieve →
 rerank → generate. It describes the **one-time** tuning pass on the reference
@@ -53,11 +55,36 @@ the candidate set that the generator knobs are then tuned against.
 1. **qrels** — for each eval question, a label of which chunks are actually
    relevant (the gold set). `ground_truth_contexts` in `test_dataset.json` is
    close but is hand-authored prose, not chunk IDs; a tuning pass needs the
-   labels tied to real `docname:chunk_index` keys.
-2. **A bigger dataset** — ~100–200 questions, 15–30 per `case_class` (see the
-   power analysis below). Tracked as the follow-up to #102.
-3. **A dev/test split** — tune every knob on dev, report final numbers once on
-   held-out test. Tuning and reporting on the same set overfits to the eval.
+   labels tied to real `docname:chunk_index` keys. **Still outstanding.**
+2. **A bigger dataset** — ✅ *partial.* #112 grew `test_dataset.json` to 84
+   entries (5–8 per headline slice) with a dev/test `split`, and added
+   `scripts/generate_eval_set.py` to draft candidates from the live corpus. This
+   is **not** the ~150 the power analysis below wants — the ~38-clause demo
+   corpus saturates before then (see next section). The full set waits on the
+   CUAD corpus-expansion issue (#129).
+3. **A dev/test split** — ✅ *done.* Every entry is `dev` (39) or `test` (53);
+   `evaluate.py --split dev|test|all`. Tune on `dev`, freeze
+   `results.baseline.json` on `test`.
+
+### The corpus-size ceiling — what #113 can and cannot tune here
+
+The reference corpus is ~38 clause-bearing chunks. With `RETRIEVAL_TOP_K = 20`,
+the candidate pool is over half the corpus, so `recall@20` sits at the ceiling
+for almost every question and the **retrieval-only sweeps cannot separate
+configurations** no matter how many questions the set has. On this corpus #113
+realistically tunes only:
+
+- system prompt
+- `QUERY_REWRITE_STRATEGY` — compared on the **judge headline**, not `recall@20`
+- `RERANK_TOP_N`
+- `OPENAI_MODEL`
+
+`chunk_size` / `chunk_overlap`, RRF `k`, and `RETRIEVAL_TOP_K` stay on
+conventional defaults until either the corpus is expanded (#129) or they
+are nudged per-client (#127, which is where `RETRIEVAL_TOP_K` tuning already
+lives). Report retrieval at `recall@5` / `@10` rather than `@20` if you keep any
+deterministic retrieval reporting — it gives the retriever something to
+discriminate. (Full reasoning: #113 comment, 2026-08-28.)
 
 ## General method — applies to every knob
 
@@ -262,8 +289,9 @@ should be re-examined.
 - `pipeline/query_rewriter.py` — the two rewrite strategies
 - `config.py`, `pipeline/constants.py` — where the knobs live
 - `docs/MODEL_PROVIDER_SWAP.md` — swapping `OPENAI_MODEL` / `EMBEDDING_MODEL` provider
-- #102 — the harder eval dataset (prerequisite); its follow-up is the ~150-question set
-- #112 — build the reference tuning set + candidate generator (prerequisite for #113)
+- #102 — the harder eval dataset (prerequisite)
+- #112 — reference tuning set (92 entries + dev/test split) + `scripts/generate_eval_set.py`;
+  the full ~150 waits on the CUAD corpus-expansion issue (#129)
 - #113 — the one-time reference-corpus tuning pass this doc describes
 - #127 — the per-client validation workflow (uses #113's defaults + thresholds)
 - #101 / #90 — local embedding model / provider-agnostic model seam
