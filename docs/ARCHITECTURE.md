@@ -366,27 +366,61 @@ meant to move the numbers.
 
 ### Not in CI
 
-The eval is deliberately not a merge gate. An LLM-judge score over ~15 headline questions wobbles
-±0.03–0.05 run-to-run (see Caveats), so a hard threshold would fire on noise and get muted; and the
-harness only exercises retrieval-ranking + generation over an already-indexed corpus — chunking and
-parsing changes don't show up until a re-ingest. Run it by hand when you touch the rewriter, fusion,
-reranker, or the generation prompt, and compare against `results.baseline.json`. An automated gate is
-only worth building once the dataset is substantially larger (order 150+ questions).
+The eval is deliberately not a merge gate. LLM-judge scores wobble ±0.03–0.05 run-to-run (see
+Caveats), so a hard threshold would fire on noise and get muted; and the harness only exercises
+retrieval-ranking + generation over an already-indexed corpus — chunking and parsing changes don't
+show up until a re-ingest. The 92-entry set (#112) narrows the noise band but does not change this
+decision — it is a better manual signal, not a gate. Run it by hand when you touch the rewriter, fusion,
+reranker, or the generation prompt, and compare against `results.baseline.json`. An automated gate
+stays off the table regardless of dataset size (see § Not in CI above) — the larger set below
+tightens the manual signal, it does not turn the eval into a merge gate.
 
 ### The dataset
 
-~22 entries grounded in the current `scripts/seed_data/demo_data.yaml` fixtures with real
-`CON-YYYY-NNNNN` docnames. Each carries `question`, `ground_truth_contexts`, `ground_truth_answer`,
-a free-text `capability` label, a `case_class` (the slice key), and an optional `expected_fail`
-flag. `evaluate.py` reports one headline metric set plus a `metrics_by_case_class` breakdown.
+**92 entries** grounded in the current `scripts/seed_data/demo_data.yaml` fixtures with real
+`CON-YYYY-NNNNN` docnames (#112 — grew the ~22-entry #102 set). Each carries `question`,
+`ground_truth_contexts`, `ground_truth_answer`, a `split` (`"dev"` / `"test"`), a free-text
+`capability` label, a `case_class` (the slice key), and an optional `expected_fail` flag.
+`evaluate.py` reports one headline metric set plus a `metrics_by_case_class` breakdown.
+
+**dev/test split.** Every entry is `dev` (39) or `test` (53), ~40/60. Tune knobs and iterate the
+prompt against `evaluate.py --split dev`; freeze `results.baseline.json` against `--split test` only,
+so methodology work never overfits the numbers it is judged on. `--split all` (the default) scores
+everything. Per slice:
+
+| `case_class` | dev | test | total |
+|---|---|---|---|
+| `showcase` | 7 | 12 | 19 |
+| `disambiguation` | 6 | 9 | 15 |
+| `precision-multi` | 7 | 7 | 14 |
+| `semantic-no-anchor` | 6 | 8 | 14 |
+| `refusal` | 5 | 8 | 13 |
+| `aggregation` | 4 | 4 | 8 |
+| `temporal` | 4 | 5 | 9 |
+
+**8 deliberately hard headline questions** carry a `capability` prefixed `Hard —` (multi-hop
+synthesis across two contracts, reconciling a contract's summary clause against its attached PDF,
+cross-document numeric comparison, near-identical distractor where the explicit figure lives in the
+*superseded* contract, all-and-only with a trap, numeric reasoning with an honest "that value isn't
+in the corpus" gap). These are the questions with real headroom to move — the rest of the headline
+is near the corpus ceiling (see § Interpreting the numbers).
+
+**Why ~90 and not the ~150 first scoped for #112:** the demo corpus is ~38 clause-bearing chunks;
+past ~90 questions the slices fill with near-duplicate paraphrases rather than distinct cases. This
+is what the corpus supports without manufacturing redundancy — enough to roughly halve the
+run-to-run CI on the judge headline versus the old 22. The full ~150, and any real retrieval-knob
+tuning in #113 (`chunk_size` / RRF `k` / `RETRIEVAL_TOP_K` are ceiling-bound on a corpus this
+small), wait on the CUAD corpus-expansion issue (#129). `scripts/generate_eval_set.py` drafts
+candidate entries from the live collection (LLM over the real corpus → a human-review file); it is
+also the per-client onboarding tool (#127).
 
 | `case_class` | What it stresses |
 |---|---|
-| `showcase` | One question per row of the README **What It Does** table — a distinct component each (BM25 exact-term, vector paraphrase, reranker cross-document, HyDE abstract, plain-language↔field, PDF). Easy by design. |
-| `disambiguation` | A supplier with two contracts (Alpha current vs superseded, Telstar primary vs backup, Vertex procurement vs support, Ashford live vs cancelled) — the near-duplicate must not be cited. |
-| `precision-multi` | "Which suppliers do X" — retrieval must return *all and only* the matches, against a top-5 rerank budget. |
-| `semantic-no-anchor` | No supplier name in the question — BM25 has nothing to grab, the dense side has to carry it. |
-| `refusal` | `ground_truth_contexts: []`. Globex (never seeded) and a clause genuinely absent from a real contract (force majeure in the Telstar agreement). |
+| `showcase` | Each row of the README **What It Does** table (BM25 exact-term, vector paraphrase, reranker cross-document, HyDE abstract, plain-language↔field, PDF), 2–3 questions per capability across different suppliers. Easy by design. |
+| `disambiguation` | A supplier with two or more contracts (Zuckerman MSA vs audit, Alpha current vs superseded, Summit base vs addendum, Coastal live vs proposed, Telstar primary vs backup, Vertex procurement vs support, Ashford live vs cancelled, Ironclad current vs prior, Quantum full vs pilot) — the near-duplicate must not be cited. |
+| `precision-multi` | "Which suppliers/contracts do X" — retrieval must return *all and only* the matches, against a top-5 rerank budget. |
+| `semantic-no-anchor` | No supplier name and no doc number in the question — BM25 has nothing to grab, the dense side has to carry it. |
+| `refusal` | `ground_truth_contexts: []`. Suppliers never seeded (Globex, Initech, …) and clause types genuinely absent from a real, named contract (force majeure in Telstar; price escalation in Alpha; governing law in Zuckerman). |
 | `aggregation` | `expected_fail: true`. Counting / averaging / enumerating over the corpus — the top-5 budget drops records, and there is no arithmetic. |
 | `temporal` | `expected_fail: true`. "Active now", "expires in 6 months", "most recent" — no date arithmetic in the query path, and `status` in the index is stale (see Known Limitations above). |
 
@@ -430,10 +464,14 @@ This whole layer is additive and optional: `evaluate.py` runs identically, and `
 offline path this repo's own baseline relies on is unchanged.
 
 **Client deployments (#118):** `test_dataset.json`/`results.baseline.json` in *this* repo are
-synthetic demo data and stay committed. For a real client, point `LANGFUSE_PUBLIC_KEY`/
-`LANGFUSE_SECRET_KEY`/`LANGFUSE_HOST` at their own Langfuse project and run `push_dataset.py` against
-their own (uncommitted) dataset file — their golden-set questions and scores live only in their
-project, never in this repo's git history. `evaluate.py`'s code path is identical either way.
+synthetic demo data and stay committed. For a real client, all eval artifacts — the drafted
+candidates, the reviewed `<client>_dataset.json`, and the `<client>_results.json` — live under
+`evaluation/client/`, a **gitignored** directory (only its `README.md` is tracked). Point
+`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`/`LANGFUSE_HOST` at the client's own Langfuse project and
+run `push_dataset.py --dataset evaluation/client/<client>_dataset.json` — their golden-set questions
+and scores live only in their Langfuse project and transiently on the deployer's machine, never in
+this repo's git history. `evaluate.py`'s code path is identical either way. `scripts/generate_eval_set.py`
+warns if a non-default collection's output is not headed for `evaluation/client/`.
 
 `evaluate.py` runs against whatever is already in the Qdrant collection and exits with an error if
 it is empty — a real run needs a live, fully-ingested collection so retrieval, chunking and parsing
@@ -473,33 +511,40 @@ check, not necessarily a regression.
 
 ### Interpreting the numbers
 
-Baseline run (2026-08-27, `gpt-4o`, frozen in `results.baseline.json`) — headline over the 15
-non-`expected_fail` questions: faithfulness 0.85, answer_relevancy 0.93, context_recall 0.89,
-context_precision 0.91, refusal 2/2. By slice:
+Baseline run (**2026-08-29**, `gpt-4o`, `--split test`, frozen in `results.baseline.json`) —
+headline over the **36** non-`expected_fail` test questions: faithfulness **0.87**, answer_relevancy
+**0.88**, context_recall **0.94**, context_precision **0.89**, refusal **8/8**. By slice
+(`f / ar / cr / cp`):
 
 | slice | n | what the numbers say |
 |---|---|---|
-| `showcase` | 6 | ~0.88 / 0.95 / 0.92 / 0.93 — high, but **easy by construction** (README questions, a distinctive supplier token each, near-verbatim ground truth, a ~60-chunk corpus where the top-20 pool holds a third of everything so `context_recall` near 1.0 is nearly free — `proj-ticket-rag` hit the same ceiling). A "not broken" signal, not a quality measurement. |
-| `disambiguation` | 4 | `context_precision` **1.00** — the reranker cites the right contract (current vs superseded, primary vs backup, live vs cancelled) every time. This is the slice a retrieval regression would break first. |
-| `precision-multi` | 2 | Answers list all matches correctly, but `context_precision` **0.50** — the top-5 pool carries irrelevant contracts. The known top-k limitation, made visible without the answer being wrong. |
-| `semantic-no-anchor` | 3 | `context_recall`/`context_precision` **1.00** with no lexical anchor — the dense side carries it. `faithfulness` 0.71 is LLM-judge strictness on one answer (manually verified grounded), not a hallucination; small-N noise. |
-| `aggregation` | 2 | `expected_fail`. Q "how many cancelled" found **2 of 3** (top-5 dropped the third). `context_recall` 0.33. |
-| `temporal` | 3 | `expected_fail`. The pipeline **refuses** "which are active now" / "expiring in 6 months" rather than fabricating dates — graceful, but scores ~0 on RAGAS. "Most recent Vertex contract" it got right by comparing `start_date` in the framed metadata. |
+| `showcase` | 12 | 0.79 / 0.87 / **1.00** / 0.85 — `context_recall` still near-free (a ~60-chunk corpus where the top-20 pool holds a third of everything), but `faithfulness` **0.79** is real now: the 4 `Hard —` multi-hop / numeric questions pull it down. One is a genuine miss — "which service-credit cap is lowest" answers Nimbus (30%) instead of Telstar (20%, a figure that lives only in the attached PDF). That's the eval doing its job. |
+| `disambiguation` | 9 | `context_precision` **0.99** — the reranker still cites the right contract nearly every time; `answer_relevancy` dips to **0.80** on the hard near-identical-distractor case (the "5 business days" figure sits in the *superseded* Vertex contract). This is the slice a retrieval regression would break first. |
+| `precision-multi` | 7 | `context_recall` **0.75**, `context_precision` **0.75** — the top-5 pool can't hold every match on "which contracts do X". The known top-k limitation, made visible; answers still list most matches. |
+| `semantic-no-anchor` | 8 | `context_recall` **1.00** / `context_precision` **0.95** with no lexical anchor — the dense side carries it. `faithfulness` 0.89. |
+| `aggregation` | 4 | `expected_fail`. f 0.42 / cr **0.00** / cp **0.00** — retrieval returns a few relevant contracts but never the full set the "count/enumerate everything" reference needs. |
+| `temporal` | 5 | `expected_fail`. f 0.38 / cr 0.17 — the pipeline attempts date-based answers it cannot ground ("expiring within six months", "started in 2026"); the reference answers describe the date-based truth *and* why the pipeline can't compute it. |
 
 Caveats:
 
 - **Nondeterministic.** LLM-judge scores wobble ±0.03–0.05 run-to-run on identical inputs — one of
   the reasons the eval is not a merge gate. Compare a run against the baseline per `case_class`, not
   on the headline alone, and treat a single-slice move within that band as noise.
-- **Still smallish N.** 15 headline questions, 2–4 per slice. Directional; it will not cleanly
-  separate close configurations (HyDE vs step-back) — an ablation needs the slices deepened further.
-  See `docs/PIPELINE_TUNING.md` for how every knob (`chunk_size`, `QUERY_REWRITE_STRATEGY`,
-  `top_k`, `top_n`, model) would be tuned on a bigger dataset.
+- **The `Hard —` questions carry the signal.** Without them the headline sits near the corpus
+  ceiling (~0.92 faithfulness, cr ~1.0). The 8 hard multi-hop / clause-vs-PDF / numeric questions are
+  where a real pipeline change will show up, and where the pipeline already has a visible miss
+  (`showcase` faithfulness 0.79). The rest of the headline is a "not broken" tripwire.
+- **Still a small corpus.** 92 questions over ~38 clause-bearing chunks — deep enough to tighten the
+  judge headline, not deep enough to separate close *retrieval* configs (HyDE vs step-back on
+  `recall@20` is ceiling-bound at this corpus size). See `docs/PIPELINE_TUNING.md` for which knobs
+  #113 can and cannot tune here.
 - **`expected_fail` is scored, not skipped.** `aggregation` + `temporal` land in
-  `expected_fail_metrics` (baseline: f 0.57 / cr 0.23 / cp 0.23, n=5) so the known limitations stay
-  measured without dragging the headline.
-- **Costs OpenAI quota.** Generation (`gpt-4o`) + judge (`gpt-4o-mini`) calls per run;
-  `results.json` records which generation model produced it.
+  `expected_fail_metrics` (baseline: f 0.39 / ar 0.41 / cr 0.09 / cp 0.06, n=9) so the known
+  limitations stay measured without dragging the headline.
+- **Costs OpenAI quota.** A `--split test` run is roughly **$0.25–0.35** — generation (`gpt-4o`)
+  ~90% of it, judge (`gpt-4o-mini`) the rest. The pipeline cost is exact in Langfuse (sum
+  `totalCost` over the `eval_question` traces); the judge cost is not yet captured (#130 — estimate
+  only for now). `results.json` records the generation model and the `config` block.
 
 ## Testing Strategy
 

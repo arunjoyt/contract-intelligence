@@ -1,15 +1,20 @@
 {
-  "note": "Frozen reference run from #102 (22-question dataset, gpt-4o generation). RAGAS metrics are LLM-judged and drift +/-0.03-0.05 run-to-run; this is a point-in-time reference for spotting regressions by eye, not a spec. Headline covers the 15 non-expected_fail questions; metrics_by_case_class breaks it down; expected_fail_metrics holds the aggregation + temporal cases (known limitations, scored separately). Regenerate deliberately (copy a clean evaluation/results.json here) only when the pipeline changes on purpose; evaluate.py always writes the live run to the gitignored evaluation/results.json, never this file. The `config` block was backfilled in #110 from the pinned deps + defaults in effect for this run.",
-  "timestamp": "2026-08-27T09:28:34.194181+00:00",
+  "timestamp": "2026-08-29T13:07:53.761339+00:00",
   "dataset": "evaluation/test_dataset.json",
+  "split": "test",
   "model": "gpt-4o",
   "config": {
     "rewrite_strategy": "hyde",
+    "rewrite_model": "gpt-4o-mini",
     "retrieval_top_k": 20,
     "rerank_top_n": 5,
     "generation_model": "gpt-4o",
     "generation_max_tokens": 1024,
     "ragas_judge_model": "gpt-4o-mini",
+    "ragas_judge_embedding_model": "text-embedding-ada-002",
+    "embedding_model": "text-embedding-3-small",
+    "chunk_size": 512,
+    "chunk_overlap": 64,
     "versions": {
       "ragas": "0.2.6",
       "openai": "1.54.0",
@@ -18,68 +23,68 @@
       "rank-bm25": "0.2.2"
     }
   },
-  "num_questions": 22,
-  "num_headline": 15,
-  "num_scored": 20,
-  "num_refusal_cases": 2,
-  "num_expected_fail": 5,
+  "num_questions": 53,
+  "num_headline": 36,
+  "num_scored": 45,
+  "num_refusal_cases": 8,
+  "num_expected_fail": 9,
   "metrics": {
-    "faithfulness": 0.8471,
-    "answer_relevancy": 0.9313,
-    "context_recall": 0.8944,
-    "context_precision": 0.9059,
+    "faithfulness": 0.8655,
+    "answer_relevancy": 0.8787,
+    "context_recall": 0.9375,
+    "context_precision": 0.8872,
     "refusal_handled": 1.0
   },
   "metrics_by_case_class": {
     "aggregation": {
-      "faithfulness": 0.9286,
-      "answer_relevancy": 0.9422,
-      "context_recall": 0.3333,
-      "context_precision": 0.4021,
-      "n": 2
-    },
-    "disambiguation": {
-      "faithfulness": 0.9018,
-      "answer_relevancy": 0.8938,
-      "context_recall": 0.7917,
-      "context_precision": 1.0,
+      "faithfulness": 0.4167,
+      "answer_relevancy": 0.4365,
+      "context_recall": 0.0,
+      "context_precision": 0.0,
       "n": 4
     },
+    "disambiguation": {
+      "faithfulness": 0.9112,
+      "answer_relevancy": 0.801,
+      "context_recall": 0.9444,
+      "context_precision": 0.9852,
+      "n": 9
+    },
     "precision-multi": {
-      "faithfulness": 0.8333,
-      "answer_relevancy": 0.9852,
-      "context_recall": 0.875,
-      "context_precision": 0.5,
-      "n": 2
+      "faithfulness": 0.9082,
+      "answer_relevancy": 0.9407,
+      "context_recall": 0.75,
+      "context_precision": 0.7548,
+      "n": 7
     },
     "semantic-no-anchor": {
-      "faithfulness": 0.7111,
-      "answer_relevancy": 0.9079,
+      "faithfulness": 0.8854,
+      "answer_relevancy": 0.9246,
       "context_recall": 1.0,
-      "context_precision": 1.0,
-      "n": 3
+      "context_precision": 0.9549,
+      "n": 8
     },
     "showcase": {
-      "faithfulness": 0.8833,
-      "answer_relevancy": 0.95,
-      "context_recall": 0.9167,
-      "context_precision": 0.9315,
-      "n": 6
+      "faithfulness": 0.7931,
+      "answer_relevancy": 0.8702,
+      "context_recall": 1.0,
+      "context_precision": 0.8458,
+      "n": 12
     },
     "temporal": {
-      "faithfulness": 0.3333,
-      "answer_relevancy": 0.3208,
+      "faithfulness": 0.375,
+      "answer_relevancy": 0.3918,
       "context_recall": 0.1667,
-      "context_precision": 0.1111,
-      "n": 3
+      "context_precision": 0.1167,
+      "n": 5
     }
   },
   "expected_fail_metrics": {
-    "faithfulness": 0.5714,
-    "answer_relevancy": 0.5694,
-    "context_recall": 0.2333,
-    "context_precision": 0.2275,
-    "n": 5
+    "faithfulness": 0.3935,
+    "answer_relevancy": 0.4117,
+    "context_recall": 0.0926,
+    "context_precision": 0.0648,
+    "n": 9
   },
   "refusal_results": [
     {
@@ -89,6 +94,36 @@
     },
     {
       "question": "What does our contract with Telstar Connectivity Ltd. say about force majeure?",
+      "case_class": "refusal",
+      "handled": true
+    },
+    {
+      "question": "What are the delivery terms in our contract with Initech Logistics?",
+      "case_class": "refusal",
+      "handled": true
+    },
+    {
+      "question": "What discount has Wayne Office Solutions agreed to give us?",
+      "case_class": "refusal",
+      "handled": true
+    },
+    {
+      "question": "What background-check requirements does the Pristine Commercial Cleaning contract impose on cleaning staff?",
+      "case_class": "refusal",
+      "handled": true
+    },
+    {
+      "question": "How does the Greenfield Waste Management contract handle hazardous or regulated waste?",
+      "case_class": "refusal",
+      "handled": true
+    },
+    {
+      "question": "Does the Harvest Catering Supplies agreement give them exclusive rights to supply our offices?",
+      "case_class": "refusal",
+      "handled": true
+    },
+    {
+      "question": "How long after termination does Pristine Commercial Cleaning have to return or destroy our site access information?",
       "case_class": "refusal",
       "handled": true
     }
@@ -110,33 +145,10 @@
     },
     {
       "case_class": "showcase",
-      "capability": "Cross-document synthesis (reranker)",
-      "question": "Compare the payment terms across our contracts with Alpha Supplies Ltd. and Summit Traders Ltd.",
-      "answer": "The payment terms for the contracts with Alpha Supplies Ltd. and Summit Traders Ltd. are as follows:\n\n- For Alpha Supplies Ltd., the current active contract (CON-2026-00026) specifies that payment is due within 30 days of the invoice date (Net 30) [CON-2026-00026]. The prior inactive contract (CON-2026-00027) also had Net 30 payment terms [CON-2026-00027].\n\n- For Summit Traders Ltd., both the unsigned contract (CON-2026-00024) and the inactive addendum (CON-2026-00025) specify that payment is due within 45 days of the invoice date (Net 45) [CON-2026-00024] [CON-2026-00025].",
-      "retrieved_context_count": 5
-    },
-    {
-      "case_class": "showcase",
       "capability": "HyDE query rewriting (abstract question)",
       "question": "What recourse do we have if a security services vendor doesn't perform to the agreed standard?",
       "answer": "If a security services vendor, such as Zuckerman Security Ltd., does not perform to the agreed standard, there are a couple of recourses available according to the contract [CON-2026-00022]:\n\n1. **Service Level Agreement Penalty**: If Zuckerman Security Ltd. exceeds the maximum of two service level incidents per calendar quarter, a penalty equal to 5% of the quarterly invoice amount shall apply for each additional incident.\n\n2. **Termination for Cause**: Either party may terminate the agreement for cause upon written notice, subject to a fifteen (15) day cure period during which the breaching party may remedy the default.",
       "retrieved_context_count": 5
-    },
-    {
-      "case_class": "showcase",
-      "capability": "Plain-language \u2194 exact-value interpretation",
-      "question": "Has our contract with Zuckerman Security Ltd. been signed yet?",
-      "answer": "No, the contract with Zuckerman Security Ltd. has not been signed. The status of the contract [CON-2026-00022] is \"Unsigned\" [CON-2026-00022]. Additionally, the agreement [CON-2026-00023] was mutually terminated prior to signature [CON-2026-00023].",
-      "retrieved_context_count": 5
-    },
-    {
-      "case_class": "refusal",
-      "capability": "Grounded refusal (no hallucination)",
-      "question": "What's our contract value with a supplier called Globex Corp?",
-      "answer": "I could not find relevant information in the contract documents.",
-      "retrieved_context_count": 5,
-      "refusal_case": true,
-      "refusal_handled": true
     },
     {
       "case_class": "showcase",
@@ -146,17 +158,38 @@
       "retrieved_context_count": 5
     },
     {
-      "case_class": "disambiguation",
-      "capability": "Multi-contract supplier \u2014 current vs superseded",
-      "question": "What warranty does Alpha Supplies Ltd. give on goods under our current packaging agreement?",
-      "answer": "Alpha Supplies Ltd. warrants all delivered goods against defects for a period of 90 days under the current packaging agreement [CON-2026-00026]. Defective goods shall be replaced at Alpha's expense, including shipping costs for the return and replacement [CON-2026-00026].",
+      "case_class": "showcase",
+      "capability": "Hybrid search \u2014 exact term (BM25)",
+      "question": "What is the per-incident limit on Coastal Warehousing & Logistics Ltd.'s liability for damaged goods?",
+      "answer": "The per-incident limit on Coastal Warehousing & Logistics Ltd.'s liability for damaged goods is capped at the declared value of the goods or $50,000, whichever is lower [CON-2026-00035].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "showcase",
+      "capability": "Hybrid search \u2014 paraphrase (vector)",
+      "question": "Who covers the cost of maintaining the forklifts we lease?",
+      "answer": "Ironclad Equipment Leasing Co. is responsible for all scheduled and unscheduled maintenance on the leased forklifts. The buyer is responsible for daily operator safety checks and reporting faults promptly [CON-2026-00043].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "showcase",
+      "capability": "HyDE query rewriting (abstract question)",
+      "question": "If a logistics provider damages our goods while they're in storage, how is our financial exposure limited?",
+      "answer": "Your financial exposure is limited to the declared value of the goods or $50,000 per incident, whichever is lower, if a logistics provider damages your goods while they're in storage [Warehousing & Logistics - Liability Terms] [CON-2026-00035].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "showcase",
+      "capability": "PDF ingestion",
+      "question": "Per the attached equipment lease schedule, what happens if we return Ironclad's equipment before the lease term ends?",
+      "answer": "If you return Ironclad's equipment before the lease term ends, you must provide thirty (30) days' written notice and will be subject to an early-return fee equal to one (1) month's lease payment [CON-2026-00043].",
       "retrieved_context_count": 5
     },
     {
       "case_class": "disambiguation",
-      "capability": "Multi-contract supplier \u2014 primary vs backup",
-      "question": "Which of our Telstar Connectivity contracts is the primary network agreement, and which was the backup line?",
-      "answer": "The primary network agreement is covered under contract [CON-2026-00039], which is active and covers primary internet and WAN connectivity across all buyer office locations with Telstar Connectivity Ltd. [CON-2026-00039]. The backup line was covered under contract [CON-2026-00040], which is inactive and was for a secondary backup connectivity line from Telstar Connectivity Ltd. at the buyer's headquarters [CON-2026-00040].",
+      "capability": "Multi-contract supplier \u2014 current vs superseded",
+      "question": "What warranty does Alpha Supplies Ltd. give on goods under our current packaging agreement?",
+      "answer": "Alpha Supplies Ltd. warrants all delivered goods against defects for a period of 90 days under the current packaging agreement. Defective goods shall be replaced at Alpha's expense, including shipping costs for the return and replacement [CON-2026-00026].",
       "retrieved_context_count": 5
     },
     {
@@ -168,9 +201,44 @@
     },
     {
       "case_class": "disambiguation",
-      "capability": "Multi-contract supplier \u2014 active vs cancelled + PDF",
-      "question": "What are the emergency and routine response times in our facilities maintenance contract with Ashford?",
-      "answer": "The emergency response time in the facilities maintenance contract with Ashford Facilities Management Ltd. is within 4 hours of report, 24 hours a day, seven days a week. Routine maintenance requests are actioned within 2 business days of submission via the buyer's facilities ticketing system [CON-2026-00032].",
+      "capability": "Multi-contract supplier \u2014 ongoing services vs one-off engagement",
+      "question": "Which of our Zuckerman Security contracts is the ongoing services agreement, and which was the one-off audit?",
+      "answer": "The ongoing services agreement with Zuckerman Security Ltd. is the Master Services Agreement, which is documented in [CON-2026-00022]. This agreement covers on-site security services, including guard staffing, access control monitoring, and incident response, and is set to run from 2026-01-01 to 2026-12-31 [CON-2026-00022].\n\nThe one-off audit was covered by the agreement in [CON-2026-00023], which was for a physical security audit of the buyer's warehouse facilities. This agreement was mutually terminated prior to signature and was originally set to start on 2025-01-01 and end on 2025-06-30 [CON-2026-00023].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "disambiguation",
+      "capability": "Multi-contract supplier \u2014 base agreement vs addendum",
+      "question": "Which Summit Traders contract is the base raw-materials supply agreement, and which is the freight add-on?",
+      "answer": "The base raw-materials supply agreement with Summit Traders Ltd. is [CON-2026-00024], which covers the supply of raw materials such as structural steel and aluminum stock [CON-2026-00024]. The freight add-on is [CON-2026-00025], which expands the existing relationship to include inbound freight consolidation for shipments over 500kg [CON-2026-00025].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "disambiguation",
+      "capability": "Multi-contract supplier \u2014 live agreement vs proposal",
+      "question": "Which Coastal Warehousing contract covers our live warehousing, and which is only a proposal?",
+      "answer": "The contract that covers live warehousing is [CON-2026-00035], which is active and covers third-party warehousing and last-mile logistics services provided by Coastal Warehousing & Logistics Ltd. [CON-2026-00035]. The contract that is only a proposal is [CON-2026-00036], which is unsigned and would add temperature-controlled cold storage capacity, pending buyer sign-off on pricing [CON-2026-00036].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "disambiguation",
+      "capability": "Multi-contract supplier \u2014 current vs prior (ended) agreement",
+      "question": "Which Ironclad forklift lease is current, and which was the earlier one that ended?",
+      "answer": "The current Ironclad forklift lease is contract [CON-2026-00043], which is active and covers the lease of six forklifts from January 1, 2026, to December 31, 2028 [CON-2026-00043]. The earlier lease that ended is contract [CON-2026-00044], which was cancelled and originally covered a smaller, three-unit fleet from June 1, 2023, to May 31, 2024 [CON-2026-00044].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "disambiguation",
+      "capability": "Multi-contract supplier \u2014 full subscription vs pilot",
+      "question": "Which Quantum Data Analytics agreement is the full platform subscription, and which is just the pilot?",
+      "answer": "The full platform subscription agreement with Quantum Data Analytics Inc. is [CON-2026-00050], which is active and covers a subscription to their spend-analytics platform, including data pipeline integration with the buyer's ERP system [CON-2026-00050]. The pilot agreement is [CON-2026-00051], which is unsigned and covers only the data pipeline setup and user acceptance testing as a precursor to the full platform subscription [CON-2026-00051].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "disambiguation",
+      "capability": "Multi-contract supplier \u2014 which agreement carries a clause",
+      "question": "Which Quantum Data Analytics contract commits the vendor to deleting our data after termination?",
+      "answer": "The contract [CON-2026-00050] with Quantum Data Analytics Inc. commits the vendor to permanently delete all buyer data from its systems upon termination of the agreement [CON-2026-00050].",
       "retrieved_context_count": 5
     },
     {
@@ -183,30 +251,102 @@
     {
       "case_class": "precision-multi",
       "capability": "Retrieve all-and-only matching contracts",
-      "question": "Which of our contracts require the supplier to delete our data after the contract ends?",
-      "answer": "The contracts that require the supplier to delete your data after the contract ends are:\n\n1. The contract with Quantum Data Analytics Inc. (CON-2026-00050), which states that upon termination of the agreement, Quantum shall permanently delete all buyer data from its systems within thirty (30) days and shall certify deletion in writing upon request [CON-2026-00050].\n\n2. The contract with Nimbus Cloud Solutions Inc. (CON-2026-00028), which specifies that all buyer data is deleted within 30 days of contract termination [CON-2026-00028].",
+      "question": "Which of our contracts are on Net 45 payment terms?",
+      "answer": "The contracts on Net 45 payment terms are:\n\n1. The contract with Summit Traders Ltd. for the supply of raw materials, which is currently unsigned [CON-2026-00024].\n2. The addendum with Summit Traders Ltd. that includes inbound freight consolidation, which is inactive [CON-2026-00025].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "precision-multi",
+      "capability": "Retrieve all-and-only matching contracts",
+      "question": "Which of our agreements promise a specific uptime or availability level with service credits for missing it?",
+      "answer": "The agreements that promise a specific uptime or availability level with service credits for missing it are:\n\n1. The agreement with Nimbus Cloud Solutions Inc. promises a 99.9% monthly platform uptime. Service credits of 5% of the monthly fee apply for each 0.1% shortfall below this threshold, up to a maximum of 30% in any given month [CON-2026-00028].\n\n2. The agreement with Telstar Connectivity Ltd. guarantees a minimum of 99.95% monthly availability for internet and WAN connectivity. Service credits apply on a sliding scale for shortfalls below this threshold, up to a maximum of 20% of that month's fees [CON-2026-00039].\n\n3. The SaaS / Software License Terms also commit to 99.9% monthly uptime, with service credits applying for any shortfall, calculated on a sliding scale against the monthly subscription fee [SaaS / Software License Terms].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "precision-multi",
+      "capability": "Retrieve all-and-only matching contracts",
+      "question": "Which agreements let either party walk away for convenience on 30 days' notice?",
+      "answer": "The agreements that allow either party to terminate for convenience with 30 days' written notice are:\n\n1. The Consulting / Professional Services Terms [Consulting / Professional Services Terms].\n2. The proposed engagement with Meridian Consulting Group [CON-2026-00031].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "precision-multi",
+      "capability": "Retrieve all-and-only matching contracts",
+      "question": "Which contracts require the supplier to give us regular reports?",
+      "answer": "The contract with Greenfield Waste Management Ltd. requires the supplier to provide quarterly waste diversion reports sufficient to support the buyer's sustainability disclosures [CON-2026-00046].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "precision-multi",
+      "capability": "Retrieve all-and-only matching contracts",
+      "question": "Which contracts specifically cover services at our headquarters building?",
+      "answer": "The contract with Pristine Commercial Cleaning Co. covers daily commercial cleaning services for the buyer's headquarters building [CON-2026-00037]. Additionally, the unsigned contract with Zuckerman Security Ltd. covers on-site security services at the buyer's primary facility, which may refer to the headquarters [CON-2026-00022].",
       "retrieved_context_count": 5
     },
     {
       "case_class": "semantic-no-anchor",
       "capability": "No supplier name in the question",
       "question": "If we stop using one of our cloud analytics platforms, what happens to the data we have put into it?",
-      "answer": "If you stop using the Nimbus Cloud Solutions Inc.'s platform, all buyer data is stored exclusively in EU-based data centers and is deleted within 30 days of contract termination [CON-2026-00028]. For Quantum Data Analytics Inc.'s platform, upon termination of the agreement, Quantum shall permanently delete all buyer data from its systems [CON-2026-00050].",
-      "retrieved_context_count": 5
-    },
-    {
-      "case_class": "semantic-no-anchor",
-      "capability": "No supplier name in the question",
-      "question": "What safeguard do we have if a vendor keeps exceeding its allowed number of service incidents?",
-      "answer": "If a vendor exceeds its allowed number of service incidents, specifically in the context of the Master Services Agreement with Zuckerman Security Ltd., there is a safeguard in place where a penalty is applied. The agreement states that Zuckerman shall maintain a maximum of two service level incidents per calendar quarter. If this threshold is exceeded, a penalty equal to 5% of the quarterly invoice amount shall apply for each additional incident [CON-2026-00022].",
+      "answer": "If you stop using the Nimbus Cloud Solutions Inc.'s platform, all buyer data is stored exclusively in EU-based data centers and is deleted within 30 days of contract termination [CON-2026-00028]. If you stop using the Quantum Data Analytics Inc.'s platform, upon termination of the agreement, Quantum shall permanently delete all buyer data from its systems [CON-2026-00050].",
       "retrieved_context_count": 5
     },
     {
       "case_class": "semantic-no-anchor",
       "capability": "No supplier name in the question",
       "question": "Do any of our agreements put a ceiling on a supplier's total financial liability, and how is it set?",
-      "answer": "Yes, there are agreements that put a ceiling on a supplier's total financial liability:\n\n1. The agreement with Zuckerman Security Ltd. includes a liability cap where the total aggregate liability of either party arising under the agreement shall not exceed an amount equal to twelve (12) months' fees paid under the contract [CON-2026-00022].\n\n2. The agreement with Coastal Warehousing & Logistics Ltd. caps the supplier's liability for loss or damage to stored goods at the declared value of the goods or $50,000 per incident, whichever is lower [CON-2026-00035]. This is consistent with the general liability terms for warehousing and logistics services [Warehousing & Logistics - Liability Terms].",
+      "answer": "Yes, there are agreements that put a ceiling on a supplier's total financial liability:\n\n1. The agreement with Zuckerman Security Ltd. sets a liability cap where the total aggregate liability of either party arising under the agreement shall not exceed an amount equal to twelve (12) months' fees paid under the contract [CON-2026-00022].\n\n2. The agreement with Coastal Warehousing & Logistics Ltd. caps the liability for loss or damage to stored goods at the declared value of the goods or $50,000 per incident, whichever is lower [CON-2026-00035]. This is consistent with the general liability terms for warehousing providers [Warehousing & Logistics - Liability Terms].",
       "retrieved_context_count": 5
+    },
+    {
+      "case_class": "semantic-no-anchor",
+      "capability": "No supplier name in the question",
+      "question": "What happens if we pay a supplier invoice after the due date?",
+      "answer": "If a supplier invoice is paid after the due date, late payments will accrue interest at a rate of 1.5% per month according to the Standard Purchase Terms - Net 30 [Standard Purchase Terms - Net 30].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "semantic-no-anchor",
+      "capability": "No supplier name in the question",
+      "question": "How long are on-site security staff bound to keep our premises information confidential?",
+      "answer": "On-site security staff are bound by confidentiality obligations covering premises layouts, access codes, and incident reports for the duration of the engagement and two years thereafter [Security Services - Confidentiality Clause].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "semantic-no-anchor",
+      "capability": "No supplier name in the question",
+      "question": "If there's a flood or power loss at one of our offices, how quickly is it dealt with?",
+      "answer": "In the event of a flood or power loss at one of your offices, emergency callouts are actioned within 4 hours, 24 hours a day, 7 days a week [Facilities Maintenance SLA Terms].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "semantic-no-anchor",
+      "capability": "No supplier name in the question",
+      "question": "What can we claim if our internet connection keeps falling short of the promised quality?",
+      "answer": "If your internet connection falls short of the promised quality, you can claim service credits. Telstar Connectivity Ltd. guarantees a minimum of 1 Gbps symmetric bandwidth per site with 99.95% monthly availability. If there is a shortfall below this threshold, service credits are issued on a sliding scale, up to a maximum of 20% of that month's fees [CON-2026-00039].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "semantic-no-anchor",
+      "capability": "No supplier name in the question",
+      "question": "Before an agency runs our advertising, what needs sign-off, and how is their fee structured?",
+      "answer": "Before an agency runs your advertising, campaign creative and media placements require written approval before publication [Marketing Services Terms]. The agency fee is structured as a cost plus an agreed agency fee, which is itemized monthly. In the specific case of the contract with Brightline Marketing Partners, the agency fee was 12% [CON-2026-00034].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "semantic-no-anchor",
+      "capability": "No supplier name in the question",
+      "question": "Does any supplier have to give us data we can use for our sustainability reporting?",
+      "answer": "Yes, Greenfield Waste Management Ltd. is required to provide quarterly waste diversion reports that are sufficient to support the buyer's sustainability disclosures [CON-2026-00046].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "refusal",
+      "capability": "Grounded refusal (no hallucination)",
+      "question": "What's our contract value with a supplier called Globex Corp?",
+      "answer": "I could not find relevant information in the contract documents.",
+      "retrieved_context_count": 5,
+      "refusal_case": true,
+      "refusal_handled": true
     },
     {
       "case_class": "refusal",
@@ -218,18 +358,88 @@
       "refusal_handled": true
     },
     {
+      "case_class": "refusal",
+      "capability": "Non-existent supplier",
+      "question": "What are the delivery terms in our contract with Initech Logistics?",
+      "answer": "I could not find relevant information in the contract documents.",
+      "retrieved_context_count": 5,
+      "refusal_case": true,
+      "refusal_handled": true
+    },
+    {
+      "case_class": "refusal",
+      "capability": "Non-existent supplier",
+      "question": "What discount has Wayne Office Solutions agreed to give us?",
+      "answer": "I could not find relevant information in the contract documents.",
+      "retrieved_context_count": 5,
+      "refusal_case": true,
+      "refusal_handled": true
+    },
+    {
+      "case_class": "refusal",
+      "capability": "Clause type genuinely absent from a real contract",
+      "question": "What background-check requirements does the Pristine Commercial Cleaning contract impose on cleaning staff?",
+      "answer": "I could not find relevant information in the contract documents.",
+      "retrieved_context_count": 5,
+      "refusal_case": true,
+      "refusal_handled": true
+    },
+    {
+      "case_class": "refusal",
+      "capability": "Clause type genuinely absent from a real contract",
+      "question": "How does the Greenfield Waste Management contract handle hazardous or regulated waste?",
+      "answer": "I could not find relevant information in the contract documents.",
+      "retrieved_context_count": 5,
+      "refusal_case": true,
+      "refusal_handled": true
+    },
+    {
+      "case_class": "refusal",
+      "capability": "Clause type genuinely absent from a real contract",
+      "question": "Does the Harvest Catering Supplies agreement give them exclusive rights to supply our offices?",
+      "answer": "I could not find relevant information in the contract documents.",
+      "retrieved_context_count": 5,
+      "refusal_case": true,
+      "refusal_handled": true
+    },
+    {
+      "case_class": "refusal",
+      "capability": "Clause type genuinely absent from a real contract",
+      "question": "How long after termination does Pristine Commercial Cleaning have to return or destroy our site access information?",
+      "answer": "I could not find relevant information in the contract documents.",
+      "retrieved_context_count": 5,
+      "refusal_case": true,
+      "refusal_handled": true
+    },
+    {
       "case_class": "aggregation",
       "capability": "Count + enumerate across the corpus (known limitation)",
       "question": "How many of our contracts have been cancelled, and which ones?",
-      "answer": "Two contracts have been cancelled:\n\n1. Contract [CON-2026-00033] with Ashford Facilities Management Ltd. [CON-2026-00033].\n2. Contract [CON-2026-00044] with Ironclad Equipment Leasing Co. [CON-2026-00044].",
+      "answer": "Two contracts have been cancelled:\n\n1. Contract with Ashford Facilities Management Ltd. [CON-2026-00033] [docname].\n2. Contract with Ironclad Equipment Leasing Co. [CON-2026-00044] [docname].",
       "retrieved_context_count": 5,
       "expected_fail": true
     },
     {
       "case_class": "aggregation",
-      "capability": "Enumerate + compute across the corpus (known limitation)",
-      "question": "What is the average payment-term length across all our supplier contracts?",
-      "answer": "The payment terms across the supplier contracts are as follows:\n\n1. [Standard Purchase Terms - Net 30]: Payment is due within 30 days of invoice date [Standard Purchase Terms - Net 30].\n2. [CON-2026-00025]: Payment is due within 45 days of invoice date (Net 45) [CON-2026-00025].\n3. [CON-2026-00024]: Payment is due within 45 days of invoice date (Net 45) [CON-2026-00024].\n4. [CON-2026-00048]: Payment is due within 30 days of invoice date (Net 30) [CON-2026-00048].\n\nTo calculate the average payment-term length:\n- Net 30 appears twice.\n- Net 45 appears twice.\n\nAverage = (30 + 45 + 45 + 30) / 4 = 37.5 days\n\nThe average payment-term length across all supplier contracts is 37.5 days.",
+      "capability": "Count across the corpus by status (known limitation)",
+      "question": "How many of our contracts are currently unsigned?",
+      "answer": "There is one contract that is currently unsigned: [CON-2026-00041] with Cornerstone Insurance Brokers Ltd. [CON-2026-00041].",
+      "retrieved_context_count": 5,
+      "expected_fail": true
+    },
+    {
+      "case_class": "aggregation",
+      "capability": "Count attachments across the corpus (known limitation)",
+      "question": "How many of our contracts have a PDF agreement attached?",
+      "answer": "I could not find relevant information in the contract documents.",
+      "retrieved_context_count": 5,
+      "expected_fail": true
+    },
+    {
+      "case_class": "aggregation",
+      "capability": "Count a doctype across the corpus (known limitation)",
+      "question": "How many standard terms and conditions documents do we maintain?",
+      "answer": "I could not find relevant information in the contract documents.",
       "retrieved_context_count": 5,
       "expected_fail": true
     },
@@ -243,19 +453,78 @@
     },
     {
       "case_class": "temporal",
-      "capability": "Enumerate on a stale, run-date-dependent status (known limitation)",
-      "question": "Which of our contracts are currently active?",
+      "capability": "Order by date to resolve 'most recent' (known limitation)",
+      "question": "What is our most recent contract with Vertex Hardware Systems Ltd.?",
+      "answer": "The most recent contract with Vertex Hardware Systems Ltd. is [CON-2026-00030], which is active and has a start date of July 1, 2026, and an end date of June 30, 2027. This contract is an addendum that adds an extended support and maintenance plan covering the laptop fleet purchased under the prior procurement agreement, including next-business-day on-site repair.",
+      "retrieved_context_count": 5,
+      "expected_fail": true
+    },
+    {
+      "case_class": "temporal",
+      "capability": "Filter by start-date year across the corpus (known limitation)",
+      "question": "Which contracts started in 2026?",
+      "answer": "The contracts that started in 2026 are:\n\n1. Contract [CON-2026-00053] with MA Inc., which started on 2026-07-23 [CON-2026-00053].\n2. Contract [CON-2026-00054] with MA Inc., which also started on 2026-07-23 [CON-2026-00054].\n3. Contract [CON-2026-00031] with Meridian Consulting Group, which started on 2026-04-01 [CON-2026-00031].",
+      "retrieved_context_count": 5,
+      "expected_fail": true
+    },
+    {
+      "case_class": "temporal",
+      "capability": "Date-range filter for a future quarter (known limitation)",
+      "question": "Which contracts are up for renewal in the last quarter of 2026?",
       "answer": "I could not find relevant information in the contract documents.",
       "retrieved_context_count": 5,
       "expected_fail": true
     },
     {
       "case_class": "temporal",
-      "capability": "Order by date to resolve 'most recent' (known limitation)",
-      "question": "What is our most recent contract with Vertex Hardware Systems Ltd.?",
-      "answer": "The most recent contract with Vertex Hardware Systems Ltd. is [CON-2026-00030], which is active and has a start date of July 1, 2026, and an end date of June 30, 2027. This contract is an addendum that adds an extended support and maintenance plan covering the laptop fleet purchased under the prior procurement agreement, including next-business-day on-site repair. [CON-2026-00030]",
+      "capability": "Evaluate date-range overlap with a past year (known limitation)",
+      "question": "Which contracts were in effect during 2024?",
+      "answer": "I could not find relevant information in the contract documents.",
       "retrieved_context_count": 5,
       "expected_fail": true
+    },
+    {
+      "case_class": "showcase",
+      "capability": "Hard \u2014 multi-hop synthesis + comparative judgment across two contracts",
+      "question": "We're moving our analytics workload from Nimbus to Quantum. Which vendor gives us the stronger contractual assurance that our data is actually destroyed after termination, and why?",
+      "answer": "Quantum Data Analytics Inc. provides a stronger contractual assurance regarding data destruction after termination. According to the contract, upon termination of the agreement, Quantum shall permanently delete all buyer data from its systems [CON-2026-00050]. In contrast, Nimbus Cloud Solutions Inc. states that all buyer data is deleted within 30 days of contract termination, but does not specify that the deletion is permanent [CON-2026-00028].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "showcase",
+      "capability": "Hard \u2014 cross-document numeric comparison",
+      "question": "Across our contracts that promise uptime or availability with service credits, which supplier's credit scheme is capped the lowest?",
+      "answer": "The supplier with the lowest cap on service credits for uptime or availability shortfalls is Nimbus Cloud Solutions Inc. Their service credits are capped at a maximum of 30% of the monthly fee in any given month [CON-2026-00028].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "showcase",
+      "capability": "Hard \u2014 distinguish two remedies across a contract, its addendum, and a PDF",
+      "question": "If a laptop from the Vertex bulk purchase fails, how fast is it made good, and which agreement covers that?",
+      "answer": "If a laptop from the Vertex bulk purchase fails, it is replaced within five (5) business days of a validated support ticket, with advance-replacement units shipped ahead of the defective return where available. This is covered under the agreement [CON-2026-00029] with Vertex Hardware Systems Ltd. [CON-2026-00029].",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "showcase",
+      "capability": "Hard \u2014 numeric reasoning with an honest gap where a value is not in the corpus",
+      "question": "Two of our contracts cap the supplier's liability. On a $200,000 loss, which cap leaves us more exposed?",
+      "answer": "The two contracts that cap the supplier's liability are:\n\n1. The contract with Coastal Warehousing & Logistics Ltd. [CON-2026-00035], which caps liability for loss or damage to stored goods at the declared value of the goods or $50,000 per incident, whichever is lower [CON-2026-00035].\n\n2. The contract with Zuckerman Security Ltd. [CON-2026-00022], which caps the total aggregate liability at an amount equal to twelve months' fees paid under the contract [CON-2026-00022].\n\nFor a $200,000 loss:\n\n- Under the Coastal Warehousing & Logistics Ltd. contract, the liability cap is $50,000, leaving you exposed to $150,000 of the loss.\n- Under the Zuckerman Security Ltd. contract, the liability cap depends on the total fees paid under the contract for twelve months. Without the exact fee amount, we cannot determine the exact exposure, but if the fees are less than $200,000, you would be exposed to the difference.\n\nTherefore, without knowing the fees paid under the Zuckerman Security Ltd. contract, the Coastal Warehousing & Logistics Ltd. contract leaves you exposed to $150,000 of the $200,000 loss.",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "disambiguation",
+      "capability": "Hard \u2014 near-identical distractor: an explicit figure sits in the superseded contract",
+      "question": "What replacement turnaround applies to defective hardware under our current Vertex arrangement?",
+      "answer": "The current Vertex arrangement, as per the active contract [CON-2026-00030], includes an extended support and maintenance plan with next-business-day on-site repair for the laptop fleet. However, the specific replacement turnaround for defective hardware is not detailed in this contract. The general terms for hardware replacement, as stated in the [IT Hardware Warranty Terms], indicate that defective units are replaced within 5 business days of a validated support ticket.",
+      "retrieved_context_count": 5
+    },
+    {
+      "case_class": "precision-multi",
+      "capability": "Hard \u2014 all-and-only with a trap (confidentiality is not a destruction obligation)",
+      "question": "Which suppliers are contractually required to return or destroy our data or confidential information when the relationship ends?",
+      "answer": "The suppliers contractually required to return or destroy data or confidential information when the relationship ends are:\n\n1. Nimbus Cloud Solutions Inc. - All buyer data is deleted within 30 days of contract termination [CON-2026-00028].\n2. Quantum Data Analytics Inc. - Upon termination of the agreement, Quantum shall permanently delete all buyer data from its systems [CON-2026-00050].",
+      "retrieved_context_count": 5
     }
-  ]
+  ],
+  "langfuse_run_name": "eval-9d4c72c-130226"
 }

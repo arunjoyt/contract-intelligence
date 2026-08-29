@@ -67,6 +67,7 @@ def push(dataset_path: Path = _DEFAULT_DATASET, dataset_name: str = DATASET_NAME
                 "case_class": entry.get("case_class", "uncategorized"),
                 "capability": entry.get("capability", ""),
                 "expected_fail": bool(entry.get("expected_fail", False)),
+                "split": entry.get("split", ""),
                 "ground_truth_contexts": entry.get("ground_truth_contexts", []),
             },
         )

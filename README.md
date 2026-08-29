@@ -104,8 +104,9 @@ contract-intelligence/
 │   ├── app.py                  # Streamlit chat UI (gated behind session JWT)
 │   └── auth_ui.py              # "Login with ERPNext" page, OAuth redirect, logout
 ├── evaluation/
-│   ├── test_dataset.json       # Q&A pairs for RAGAS evaluation
-│   ├── evaluate.py             # RAGAS runner
+│   ├── test_dataset.json       # 92 Q&A pairs for RAGAS eval (incl. 8 hard multi-hop), dev/test split
+│   ├── evaluate.py             # RAGAS runner (--split dev|test|all)
+│   ├── results.baseline.json   # Committed reference run (frozen against --split test)
 │   └── results.json            # Latest evaluation scores
 ├── tests/
 │   ├── test_document_parser.py
@@ -243,7 +244,7 @@ See `docs/DEPLOYMENT.md` for the required ERPNext webhook records and scripted s
 python evaluation/evaluate.py
 ```
 
-Runs RAGAS metrics (`faithfulness`, `answer_relevancy`, `context_recall`, `context_precision`) against `evaluation/test_dataset.json` and writes `evaluation/results.json` — a headline score plus a per-`case_class` breakdown. The dataset groups questions into slices: `showcase` (one per row of the **What It Does** table above — easy by design), `disambiguation` / `precision-multi` / `semantic-no-anchor` (the harder cases a regression shows up in), `refusal` (checked with a string match, not RAGAS), and `aggregation` / `temporal` (known-limitation queries, scored but excluded from the headline). This is a **manual local run**, not CI — it needs a fully-ingested Qdrant collection (run a full ingest first) so retrieval, chunking and parsing are all reflected in the scores. `evaluation/results.baseline.json` is the committed reference; refresh it in the same PR when a change is meant to move the numbers. See `docs/ARCHITECTURE.md` § Evaluation.
+Runs RAGAS metrics (`faithfulness`, `answer_relevancy`, `context_recall`, `context_precision`) against `evaluation/test_dataset.json` (92 entries with a dev/test `split`; `--split dev|test|all`) and writes `evaluation/results.json` — a headline score plus a per-`case_class` breakdown. The dataset groups questions into slices: `showcase` (each row of the **What It Does** table above — easy by design), `disambiguation` / `precision-multi` / `semantic-no-anchor` (the harder cases a regression shows up in), `refusal` (checked with a string match, not RAGAS), and `aggregation` / `temporal` (known-limitation queries, scored but excluded from the headline). This is a **manual local run**, not CI — it needs a fully-ingested Qdrant collection (run a full ingest first) so retrieval, chunking and parsing are all reflected in the scores. `evaluation/results.baseline.json` is the committed reference, frozen against `--split test`; refresh it in the same PR when a change is meant to move the numbers. `scripts/generate_eval_set.py` drafts new candidate questions from the live corpus. See `docs/ARCHITECTURE.md` § Evaluation.
 
 ## CI/CD
 
@@ -251,7 +252,7 @@ Runs RAGAS metrics (`faithfulness`, `answer_relevancy`, `context_recall`, `conte
 - `ruff check .` — linting
 - `pytest tests/` — unit tests (no network required; OpenAI and Qdrant are mocked)
 
-That's the whole CI surface. RAGAS evaluation is **not** in CI — it's a manual local run (see [Evaluation](#evaluation) above). A judge-based score on ~17 headline questions is too noisy to gate a merge on; an automated gate is only worth revisiting once the dataset is substantially larger.
+That's the whole CI surface. RAGAS evaluation is **not** in CI — it's a manual local run (see [Evaluation](#evaluation) above). The LLM judge is too noisy to threshold on, and re-ingest-only changes (chunking, parsing) never surface in it — so an automated gate stays off the table regardless of dataset size.
 
 Integration tests (`tests/test_integration.py`) require a live ERPNext + Qdrant instance and are opt-in via `RUN_INTEGRATION=1`. Run `./scripts/run_integration.sh` (optionally passing pytest args, e.g. `-m langfuse`) to save a durable log + self-contained HTML report under `test-results/` (gitignored) instead of only having them in your terminal scrollback.
 
