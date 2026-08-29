@@ -507,6 +507,21 @@ def evaluate(dataset_path: Path, output_path: Path, split: str = "all") -> None:
                 "n": int(len(failing)),
             }
 
+        # Attach per-question RAGAS scores back onto the per_question records, so a
+        # tuning pass (#113) can run paired tests across configs instead of only
+        # comparing slice means. Matched by question text (per_question also holds
+        # the refusal records, which RAGAS never scored).
+        scores_by_q = {
+            sample_questions[i]: {
+                col: (None if _is_nan(df.iloc[i][col]) else round(float(df.iloc[i][col]), 4))
+                for col in _RAGAS_COLS
+            }
+            for i in range(len(sample_questions))
+        }
+        for rec in per_question:
+            if rec["question"] in scores_by_q:
+                rec["scores"] = scores_by_q[rec["question"]]
+
     if refusal_results:
         handled = sum(r["handled"] for r in refusal_results)
         metrics["refusal_handled"] = round(handled / len(refusal_results), 4)
@@ -598,6 +613,10 @@ _RAGAS_COLS = ("faithfulness", "answer_relevancy", "context_recall", "context_pr
 def _is_refusal(answer: str) -> bool:
     """True if the answer is the pipeline's grounded-refusal response."""
     return _REFUSAL_MARKER in answer.lower()
+
+
+def _is_nan(value: Any) -> bool:
+    return isinstance(value, float) and math.isnan(value)
 
 
 def _col_mean(df, col: str) -> float:

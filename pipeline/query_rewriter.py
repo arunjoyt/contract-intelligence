@@ -1,11 +1,14 @@
 """Query rewriting for the retrieval pipeline.
 
-Two strategies, controlled by the QUERY_REWRITE_STRATEGY env var:
+Strategies, controlled by the QUERY_REWRITE_STRATEGY env var:
 - 'hyde' (default): Prompt the rewrite model to write a hypothetical contract
   document that would answer the question, then embed that document.
   Improves recall by searching in answer-space rather than query-space.
 - 'step_back': Prompt the rewrite model to rewrite the question at a higher
   abstraction level, then embed the rewritten question.
+- 'none': No rewrite -- embed the raw question. No REWRITE_MODEL call. A real
+  contender on this corpus (mostly point lookups with distinctive supplier
+  tokens); the #113 tuning pass compares the three arms.
 
 The chat call uses REWRITE_MODEL (config.py), not OPENAI_MODEL -- this step only
 needs a scaffold paragraph to embed, and reusing gpt-4o made it dominate query
@@ -53,7 +56,12 @@ class QueryRewriter:
         The embedding is of the rewritten text; callers use it for vector search.
         Falls back to the original query if GPT-4o returns an empty response.
         """
-        rewritten = self._step_back(query) if self._strategy == "step_back" else self._hyde(query)
+        if self._strategy == "none":
+            rewritten = query
+        elif self._strategy == "step_back":
+            rewritten = self._step_back(query)
+        else:
+            rewritten = self._hyde(query)
 
         vector = self._embedder.embed_query(rewritten)
         return rewritten, vector

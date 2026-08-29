@@ -12,10 +12,13 @@ sentence-transformers / qdrant-client.
 
 from __future__ import annotations
 
+import os
+
 # Hybrid-search candidate pool size, then the cross-encoder rerank budget the
-# generator actually sees.
-RETRIEVAL_TOP_K = 20
-RERANK_TOP_N = 5
+# generator actually sees. Env-overridable so a tuning pass (#113) can sweep them
+# without editing this file between runs; the defaults are the shipped values.
+RETRIEVAL_TOP_K = int(os.environ.get("RETRIEVAL_TOP_K", "20"))
+RERANK_TOP_N = int(os.environ.get("RERANK_TOP_N", "5"))
 
 # Generation call.
 GENERATION_MAX_TOKENS = 1024
