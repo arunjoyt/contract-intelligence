@@ -5,8 +5,10 @@ hold conventional "retrieve wide, rerank narrow" defaults — **not values tuned
 this corpus.** The eval harness that could tune them (`evaluation/evaluate.py`,
 per-`case_class` slicing) exists as of #102; #112 grew the dataset to 92 entries
 with a dev/test split. That is enough to tune the generation-side knobs on the
-judge headline, but the ~38-clause demo corpus is too small to tune the
-retrieval-only knobs at all — see [the corpus-size ceiling](#the-corpus-size-ceiling--what-113-can-and-cannot-tune-here).
+judge headline. The ~38-clause demo corpus is too small to *separate* the
+retrieval-only knobs, and expanding it was considered and rejected — those knobs
+stay at conventional defaults and are owned by per-client validation instead. See
+[the corpus-size ceiling](#the-corpus-size-ceiling--what-113-can-and-cannot-tune-here).
 
 This doc walks the whole pipeline order: ingest → embed → rewrite → retrieve →
 rerank → generate. It describes the **one-time** tuning pass on the reference
@@ -56,12 +58,16 @@ the candidate set that the generator knobs are then tuned against.
    relevant (the gold set). `ground_truth_contexts` in `test_dataset.json` is
    close but is hand-authored prose, not chunk IDs; a tuning pass needs the
    labels tied to real `docname:chunk_index` keys. **Still outstanding.**
-2. **A bigger dataset** — ✅ *partial.* #112 grew `test_dataset.json` to 84
-   entries (5–8 per headline slice) with a dev/test `split`, and added
-   `scripts/generate_eval_set.py` to draft candidates from the live corpus. This
-   is **not** the ~150 the power analysis below wants — the ~38-clause demo
-   corpus saturates before then (see next section). The full set waits on the
-   CUAD corpus-expansion issue (#129).
+2. **A bigger dataset** — ✅ *as large as this corpus supports.* #112 grew
+   `test_dataset.json` to 92 entries (dev 39 / test 53, 8–19 per headline slice)
+   and added `scripts/generate_eval_set.py` to draft candidates from the live
+   corpus. This is **not** the ~150 the power analysis below wants — the
+   ~38-clause demo corpus saturates with near-duplicate paraphrases past ~85
+   questions. Expanding the corpus (e.g. ingesting CUAD) was considered and
+   **rejected** (#129, closed won't-do): it only feeds the retrieval-only sweeps,
+   which even at 150+ questions stay underpowered (~12/slice vs the ~70/slice the
+   power analysis wants), and a synthetic corpus with fabricated ERPNext metadata
+   would not transfer to real client corpora — which #127 validates directly.
 3. **A dev/test split** — ✅ *done.* Every entry is `dev` (39) or `test` (53);
    `evaluate.py --split dev|test|all`. Tune on `dev`, freeze
    `results.baseline.json` on `test`.
@@ -72,19 +78,29 @@ The reference corpus is ~38 clause-bearing chunks. With `RETRIEVAL_TOP_K = 20`,
 the candidate pool is over half the corpus, so `recall@20` sits at the ceiling
 for almost every question and the **retrieval-only sweeps cannot separate
 configurations** no matter how many questions the set has. On this corpus #113
-realistically tunes only:
+tunes:
 
 - system prompt
 - `QUERY_REWRITE_STRATEGY` — compared on the **judge headline**, not `recall@20`
 - `RERANK_TOP_N`
 - `OPENAI_MODEL`
+- `RERANKER_MODEL` — a one-shot check (is `ms-marco-MiniLM-L-6-v2` good enough vs
+  a larger cross-encoder / BGE reranker), not a sweep
 
-`chunk_size` / `chunk_overlap`, RRF `k`, and `RETRIEVAL_TOP_K` stay on
-conventional defaults until either the corpus is expanded (#129) or they
-are nudged per-client (#127, which is where `RETRIEVAL_TOP_K` tuning already
-lives). Report retrieval at `recall@5` / `@10` rather than `@20` if you keep any
-deterministic retrieval reporting — it gives the retriever something to
-discriminate. (Full reasoning: #113 comment, 2026-08-28.)
+`chunk_size` / `chunk_overlap`, RRF `k`, and `RETRIEVAL_TOP_K` **stay at
+conventional defaults** and are not tuned here:
+
+- RRF `k` — insensitive over {10–100}; no expected move (Step 4).
+- `RETRIEVAL_TOP_K` — the recall knee shifts with corpus **size and homogeneity**,
+  so it is inherently a per-client knob. A generous default (20) absorbs most
+  clients; #127 nudges it up (20 → 30 → 50) when a client slice fails.
+- `chunk_size` / `chunk_overlap` — driven by clause length, ~uniform across
+  procurement clients.
+
+Expanding the corpus to make these separable (#129) was **rejected** — see the
+Prerequisites note above. Report retrieval at `recall@5` / `@10` rather than
+`@20` if you keep any deterministic retrieval reporting — it gives the retriever
+something to discriminate. (Full reasoning: #113 comment, 2026-08-28.)
 
 ## General method — applies to every knob
 
@@ -290,8 +306,9 @@ should be re-examined.
 - `config.py`, `pipeline/constants.py` — where the knobs live
 - `docs/MODEL_PROVIDER_SWAP.md` — swapping `OPENAI_MODEL` / `EMBEDDING_MODEL` provider
 - #102 — the harder eval dataset (prerequisite)
-- #112 — reference tuning set (92 entries + dev/test split) + `scripts/generate_eval_set.py`;
-  the full ~150 waits on the CUAD corpus-expansion issue (#129)
+- #112 — reference tuning set (92 entries + dev/test split) + `scripts/generate_eval_set.py`
+- #129 — CUAD corpus expansion, **closed won't-do**: only feeds retrieval-only
+  sweeps that stay underpowered anyway, and synthetic metadata would not transfer
 - #113 — the one-time reference-corpus tuning pass this doc describes
 - #127 — the per-client validation workflow (uses #113's defaults + thresholds)
 - #101 / #90 — local embedding model / provider-agnostic model seam

@@ -219,6 +219,36 @@ def test_step_back_falls_back_to_original_on_empty_response(
 
 
 # ---------------------------------------------------------------------------
+# 'none' strategy — no rewrite
+# ---------------------------------------------------------------------------
+
+
+def test_none_strategy_embeds_raw_query_and_makes_no_llm_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    embedder = _make_embedder()
+
+    mock_client = MagicMock()
+    r = QueryRewriter(embedder=embedder, strategy="none")
+    r._client = mock_client
+
+    text, vector = r.rewrite("What are the payment terms for Acme?")
+
+    assert text == "What are the payment terms for Acme?"
+    assert vector == FAKE_VECTOR
+    embedder.embed_query.assert_called_once_with("What are the payment terms for Acme?")
+    mock_client.chat.completions.create.assert_not_called()
+
+
+def test_none_strategy_read_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("QUERY_REWRITE_STRATEGY", "none")
+    r = QueryRewriter(embedder=_make_embedder())
+    assert r._strategy == "none"
+
+
+# ---------------------------------------------------------------------------
 # Model usage
 # ---------------------------------------------------------------------------
 

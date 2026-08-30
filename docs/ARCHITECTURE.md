@@ -408,9 +408,12 @@ is near the corpus ceiling (see § Interpreting the numbers).
 **Why ~90 and not the ~150 first scoped for #112:** the demo corpus is ~38 clause-bearing chunks;
 past ~90 questions the slices fill with near-duplicate paraphrases rather than distinct cases. This
 is what the corpus supports without manufacturing redundancy — enough to roughly halve the
-run-to-run CI on the judge headline versus the old 22. The full ~150, and any real retrieval-knob
-tuning in #113 (`chunk_size` / RRF `k` / `RETRIEVAL_TOP_K` are ceiling-bound on a corpus this
-small), wait on the CUAD corpus-expansion issue (#129). `scripts/generate_eval_set.py` drafts
+run-to-run CI on the judge headline versus the old 22. `chunk_size` / RRF `k` / `RETRIEVAL_TOP_K`
+are ceiling-bound on a corpus this small and stay at conventional defaults — #113 tunes the
+generation-side knobs (rewrite strategy, `RERANK_TOP_N`, `OPENAI_MODEL`, prompt) and leaves the
+retrieval-pool knobs to per-client validation (#127). Expanding the corpus for their sake
+(#129, CUAD) was considered and closed won't-do — see `docs/PIPELINE_TUNING.md` § corpus-size
+ceiling. `scripts/generate_eval_set.py` drafts
 candidate entries from the live collection (LLM over the real corpus → a human-review file); it is
 also the per-client onboarding tool (#127).
 
