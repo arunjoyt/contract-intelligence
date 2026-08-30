@@ -266,7 +266,7 @@ Every query creates a Langfuse trace with the following child observations:
 
 | Observation | Type | Input captured | Output captured |
 |---|---|---|---|
-| `rewrite` | span | original question | rewritten text + query vector |
+| `rewrite` | generation | original question | rewritten text (`usage` from the REWRITE_MODEL call) |
 | `filter_extraction` | span | original question | `{source_doctype?, status?}` dict |
 | `hybrid_search` | span | rewritten query + filters | list of 20 scored chunks |
 | `rerank` | span | original question + 20 candidates | top-5 re-scored chunks |
@@ -274,7 +274,7 @@ Every query creates a Langfuse trace with the following child observations:
 
 The trace root carries `input.question` and `output.{answer, source_count}`. If any step raises, the failing span is ended with `level="ERROR"` (the root `trace.update(level=...)` call is a historical no-op — Langfuse traces have no `level` field, only observations do).
 
-`generate` is a Langfuse **generation** (not a plain span) — it's created with `trace.generation(model=OPENAI_MODEL)` and passes `usage={"input", "output", "total"}` (from the OpenAI response's `.usage`) to `end()`. Only `generation`-type observations get token counts and cost auto-computed by Langfuse; a plain span just stores whatever input/output you hand it (see PR [#87](https://github.com/arunjoyt/contract-intelligence/pull/87), issue #81).
+`generate` and `rewrite` are Langfuse **generations** (not plain spans) — each is created with `trace.generation(model=...)` and passes `usage={"input", "output", "total"}` (from the OpenAI response's `.usage`) to `end()`. Only `generation`-type observations get token counts and cost auto-computed by Langfuse; a plain span just stores whatever input/output you hand it (see PR [#87](https://github.com/arunjoyt/contract-intelligence/pull/87), issue #81). `rewrite` became a generation in #130 — the HyDE / step-back call (`REWRITE_MODEL`, `gpt-4o-mini`) was otherwise a plain span, so the trace's `totalCost` reflected only the `gpt-4o` answer call and understated cost/query. A rewrite strategy that makes no LLM call ends the generation with no `usage`.
 
 ### Ingestion traces
 
@@ -306,7 +306,7 @@ The Langfuse UI is accessible at `http://localhost:3000` (default docker-compose
    - Root trace `name` is `query`; `input.question` matches the sent question
    - Five child observations appear: `rewrite`, `filter_extraction`, `hybrid_search`, `rerank`, `generate`
    - Each has a non-zero duration and no error level
-   - `generate` shows non-zero `Total tokens` and a computed cost (it's a `generation`, not a plain span)
+   - `generate` and `rewrite` both show non-zero `Total tokens` and a computed cost (both are `generation`s, not plain spans); the trace `totalCost` is their sum
    - Root trace `output.answer` is non-empty and contains at least one `[docname]`-style citation
    - On a forced error, `level` is `ERROR` on the failing span and propagates to the root trace
 6. Trigger an ingestion path and check its trace:
@@ -440,7 +440,8 @@ retrieved chunks the same way (`_frame_chunk`) so RAGAS compares like with like.
 baseline run exercises the exact prompt and retrieval budget the live pipeline does. `results.json`
 records a `config` block (rewrite strategy, judge model, generation model, top-k/top-n, chunking/
 embedding knobs, pinned library versions) so a baseline is self-describing and two runs are
-comparable (#110, #117).
+comparable (#110, #117), plus a `costs` block and top-level `request_count` (#130) — see
+[§ Interpreting the numbers](#interpreting-the-numbers) "Costs OpenAI quota".
 
 ### Langfuse Dataset + Experiment logging (optional, additive)
 
@@ -545,9 +546,15 @@ Caveats:
   `expected_fail_metrics` (baseline: f 0.39 / ar 0.41 / cr 0.09 / cp 0.06, n=9) so the known
   limitations stay measured without dragging the headline.
 - **Costs OpenAI quota.** A `--split test` run is roughly **$0.25–0.35** — generation (`gpt-4o`)
-  ~90% of it, judge (`gpt-4o-mini`) the rest. The pipeline cost is exact in Langfuse (sum
-  `totalCost` over the `eval_question` traces); the judge cost is not yet captured (#130 — estimate
-  only for now). `results.json` records the generation model and the `config` block.
+  ~90% of it, judge (`gpt-4o-mini`) the rest. `results.json`'s `costs` block records it (#130):
+  `pipeline` (rewrite `gpt-4o-mini` + generate `gpt-4o` token cost, per-model), `judge` (RAGAS
+  `gpt-4o-mini` token cost + call count, from RAGAS's `token_usage_parser`; the small `ada-002`
+  embedding cost for `answer_relevancy` is excluded), and a top-level `request_count`. The
+  **request count**, not the dollar figure, is the binding constraint — the daily `gpt-4o-mini`
+  cap is per-request, and a knob sweep hits it long before the spend matters (a `top_n` sweep of
+  ~50 runs blew a 10k/day cap during #113). `evaluate.py` also logs a one-line
+  `pipeline $X (N req) + judge $Y (M req) = $Z` summary. Pipeline cost is still exact in Langfuse
+  too (sum `totalCost` over the `eval_question` traces — now including the rewrite `generation`).
 
 ## Testing Strategy
 

@@ -21,13 +21,18 @@ FAKE_VECTOR = [0.1] * 1536
 # ---------------------------------------------------------------------------
 
 
-def _make_openai_response(content: str) -> MagicMock:
+def _make_openai_response(
+    content: str, prompt_tokens: int = 30, completion_tokens: int = 10
+) -> MagicMock:
     msg = MagicMock()
     msg.content = content
     choice = MagicMock()
     choice.message = msg
     resp = MagicMock()
     resp.choices = [choice]
+    resp.usage.prompt_tokens = prompt_tokens
+    resp.usage.completion_tokens = completion_tokens
+    resp.usage.total_tokens = prompt_tokens + completion_tokens
     return resp
 
 
@@ -275,3 +280,20 @@ def test_rewrite_model_differs_from_generation_model_by_default() -> None:
 
     assert REWRITE_MODEL == "gpt-4o-mini"
     assert REWRITE_MODEL != OPENAI_MODEL
+
+
+def test_rewrite_records_last_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#130: the rewrite call's token usage is exposed so callers can record it as
+    a Langfuse `generation` -- it was previously discarded."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = _make_openai_response(
+        "doc", prompt_tokens=42, completion_tokens=8
+    )
+
+    r = QueryRewriter(embedder=_make_embedder(), strategy="hyde")
+    r._client = mock_client
+
+    r.rewrite("query")
+
+    assert r.last_usage == {"input": 42, "output": 8, "total": 50}

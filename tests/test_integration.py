@@ -1265,8 +1265,13 @@ def test_evaluate_results_json_has_required_keys(eval_results) -> None:
     import json
 
     data = json.loads(eval_results.read_text())
-    for key in ("timestamp", "num_questions", "metrics", "per_question"):
+    for key in ("timestamp", "num_questions", "metrics", "per_question", "costs", "request_count"):
         assert key in data, f"Missing top-level key '{key}' in results.json"
+
+    costs = data["costs"]
+    assert costs["request_count"] == data["request_count"]
+    assert costs["pipeline"]["requests"] >= 1
+    assert isinstance(costs["judge"], dict) and "captured" in costs["judge"]
 
 
 @live

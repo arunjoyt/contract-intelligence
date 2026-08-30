@@ -115,7 +115,13 @@ something to discriminate. (Full reasoning: #113 comment, 2026-08-28.)
 - **Power.** With per-question SD ~0.15 and wanting to detect a 0.05 gap at 80%
   power, you need ~70 questions *per slice*. Hence the ~100–200 total above.
 - **Cost on the same plot.** tokens/query, $/query, p95 latency — every knob move
-  has a cost axis, plot it alongside quality.
+  has a cost axis, plot it alongside quality. `evaluate.py` writes a `costs` block
+  to `results.json` (pipeline rewrite+generate cost per model, RAGAS-judge cost +
+  **call count**, top-level `request_count`) and logs a one-line
+  `pipeline $X (N req) + judge $Y (M req) = $Z` (#130). Watch the **request
+  count**, not the dollars: the daily `gpt-4o-mini` cap is per-request and a
+  multi-config sweep hits it long before spend matters (a `top_n` sweep of ~50
+  runs blew a 10k/day cap during this pass).
 - **One knob at a time**, unless you suspect interaction (`chunk_size × top_n`) —
   then a small grid, not a line.
 - **Decision rule.** The cheapest, fastest config whose quality is statistically

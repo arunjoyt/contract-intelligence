@@ -5,7 +5,9 @@ single pass (rewrite → hybrid search → rerank → generate), captures the ra
 retrieved chunk texts for RAGAS, then scores faithfulness, answer_relevancy,
 context_recall, and context_precision.  Results are written to
 evaluation/results.json (including a `config` block recording the prompt /
-retrieval / ingestion knobs and library versions the run used).
+retrieval / ingestion knobs and library versions the run used, and a `costs`
+block with pipeline + RAGAS-judge token cost and request counts — the daily
+OpenAI cap is per-request, so `request_count` is the number that matters, #130).
 
 The generation prompt, context-framing fields and top_k / top_n come from
 pipeline.constants -- the same module query_pipeline.py uses -- so a baseline
@@ -83,6 +85,59 @@ _DEFAULT_OUTPUT = _ROOT / "results.json"
 # EMBEDDING_MODEL (text-embedding-3-small) here measurably changed it in testing.
 _RAGAS_JUDGE_MODEL = "gpt-4o-mini"
 _RAGAS_JUDGE_EMBEDDING_MODEL = "text-embedding-ada-002"
+
+# USD per 1M tokens, (input, output). OpenAI list prices -- refresh when they move.
+# Used only to price an eval run after the fact (#130); the pipeline's production
+# cost is metered exactly by Langfuse. Embedding models list one rate, repeated.
+_PRICE_PER_1M_TOKENS: dict[str, tuple[float, float]] = {
+    "gpt-4o": (2.50, 10.00),
+    "gpt-4o-mini": (0.15, 0.60),
+    "text-embedding-3-small": (0.02, 0.02),
+    "text-embedding-ada-002": (0.10, 0.10),
+}
+
+
+def _cost_usd(model: str, input_tokens: int, output_tokens: int) -> float | None:
+    """Token cost from the static rate table, or None for an unpriced model."""
+    rate = _PRICE_PER_1M_TOKENS.get(model)
+    if rate is None:
+        return None
+    return (input_tokens * rate[0] + output_tokens * rate[1]) / 1_000_000
+
+
+def _add_tokens(acc: dict[str, dict[str, int]], model: str, usage: dict[str, int]) -> None:
+    """Fold one call's ``{input, output, ...}`` usage into a per-model accumulator."""
+    slot = acc.setdefault(model, {"input": 0, "output": 0})
+    slot["input"] += int(usage["input"])
+    slot["output"] += int(usage["output"])
+
+
+def _judge_usage(ragas_result: Any) -> dict[str, Any]:
+    """Judge-side token / request / cost totals from a RAGAS result that was run
+    with ``token_usage_parser=get_token_usage_for_openai``.
+
+    RAGAS's ``CostCallbackHandler`` appends one ``TokenUsage`` per judge LLM call,
+    so ``len(usage_data)`` is the judge request count -- the number that actually
+    hit the 10k/day ``gpt-4o-mini`` cap during #113, not the dollar figure.
+    Embedding calls (``answer_relevancy``'s ``ada-002``) are not on this path;
+    their cost is negligible next to the LLM calls ($0.10/1M tokens).
+    """
+    cb = getattr(ragas_result, "cost_cb", None)
+    usage_data = getattr(cb, "usage_data", None)
+    if not usage_data:
+        return {"captured": False}
+    input_tokens = sum(int(u.input_tokens) for u in usage_data)
+    output_tokens = sum(int(u.output_tokens) for u in usage_data)
+    cost = _cost_usd(_RAGAS_JUDGE_MODEL, input_tokens, output_tokens)
+    return {
+        "captured": True,
+        "model": _RAGAS_JUDGE_MODEL,
+        "requests": len(usage_data),
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "usd": round(cost, 4) if cost is not None else None,
+        "embedding_cost_excluded": True,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -244,8 +299,14 @@ def _run_question(
     reranker,
     openai_client,
     trace: Any = None,
-) -> tuple[str, list[str]]:
-    """Return (answer, retrieved_contexts) in a single pipeline pass.
+) -> tuple[str, list[str], dict[str, Any]]:
+    """Return (answer, retrieved_contexts, usage) in a single pipeline pass.
+
+    ``usage`` is ``{"rewrite": {...} | None, "generate": {...}}`` in the pipeline's
+    usage shape -- the caller prices and counts it (#130). The rewrite call was
+    previously wrapped in a plain span with no ``model``/``usage``, so its
+    ``REWRITE_MODEL`` cost never reached Langfuse's total; it is a ``generation``
+    now, matching the answer call.
 
     When ``trace`` is given, each step is wrapped in a Langfuse span/generation
     (same shape as ``QueryPipeline.run``) so the trace records real per-step
@@ -254,7 +315,17 @@ def _run_question(
     shows 0.00s / $0.00 in the Langfuse UI since there's nothing to compute either
     from.
     """
-    rewritten, _vector = _span(trace, "rewrite", lambda: rewriter.rewrite(question))
+    if trace:
+        rewrite_span = trace.generation(name="rewrite", model=REWRITE_MODEL)
+        try:
+            rewritten, _vector = rewriter.rewrite(question)
+            rewrite_span.end(output=rewritten, usage=rewriter.last_usage)
+        except Exception:
+            rewrite_span.end(level="ERROR")
+            raise
+    else:
+        rewritten, _vector = rewriter.rewrite(question)
+    rewrite_usage = rewriter.last_usage
 
     candidates = _span(
         trace,
@@ -275,15 +346,15 @@ def _run_question(
     if trace:
         gen_span = trace.generation(name="generate", model=OPENAI_MODEL)
         try:
-            answer, usage = _generate_answer(openai_client, question, context)
-            gen_span.end(output=answer, usage=usage)
+            answer, gen_usage = _generate_answer(openai_client, question, context)
+            gen_span.end(output=answer, usage=gen_usage)
         except Exception:
             gen_span.end(level="ERROR")
             raise
     else:
-        answer, _usage = _generate_answer(openai_client, question, context)
+        answer, gen_usage = _generate_answer(openai_client, question, context)
 
-    return answer, retrieved_contexts
+    return answer, retrieved_contexts, {"rewrite": rewrite_usage, "generate": gen_usage}
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +435,13 @@ def evaluate(dataset_path: Path, output_path: Path, split: str = "all") -> None:
     per_question: list[dict] = []
     refusal_results: list[dict] = []  # {question, case_class, handled}
 
+    # Pipeline-side cost accounting (#130). Every question fires a generate call
+    # and, unless QUERY_REWRITE_STRATEGY=none, a rewrite call -- refusal cases
+    # included, since they cost the same. Request count, not dollars, is the axis
+    # the daily OpenAI cap is enforced on.
+    pipeline_tokens: dict[str, dict[str, int]] = {}  # model -> {input, output}
+    pipeline_requests = 0
+
     for i, entry in enumerate(entries, 1):
         question: str = entry["question"]
         capability: str = entry.get("capability", "")
@@ -389,7 +467,7 @@ def evaluate(dataset_path: Path, output_path: Path, split: str = "all") -> None:
             )
 
         try:
-            answer, retrieved_contexts = _run_question(
+            answer, retrieved_contexts, q_usage = _run_question(
                 question, rewriter, hybrid_search, reranker, openai_client, trace=trace
             )
         except Exception:
@@ -397,6 +475,12 @@ def evaluate(dataset_path: Path, output_path: Path, split: str = "all") -> None:
             if trace:
                 trace.update(level="ERROR")
             continue
+
+        if q_usage["rewrite"]:
+            _add_tokens(pipeline_tokens, REWRITE_MODEL, q_usage["rewrite"])
+            pipeline_requests += 1
+        _add_tokens(pipeline_tokens, OPENAI_MODEL, q_usage["generate"])
+        pipeline_requests += 1
 
         if trace:
             trace.update(output={"answer": answer})
@@ -457,9 +541,11 @@ def evaluate(dataset_path: Path, output_path: Path, split: str = "all") -> None:
     metrics_by_case_class: dict[str, dict] = {}
     expected_fail_metrics: dict[str, float] = {}
     num_headline = 0
+    judge_usage: dict[str, Any] = {"captured": False}
 
     if samples:
         logger.info("Running RAGAS on %d samples …", len(samples))
+        from ragas.cost import get_token_usage_for_openai
         from ragas.embeddings import embedding_factory
         from ragas.llms import llm_factory
 
@@ -468,8 +554,12 @@ def evaluate(dataset_path: Path, output_path: Path, split: str = "all") -> None:
             metrics=[faithfulness, answer_relevancy, context_recall, context_precision],
             llm=llm_factory(model=_RAGAS_JUDGE_MODEL),
             embeddings=embedding_factory(model=_RAGAS_JUDGE_EMBEDDING_MODEL),
+            # Records one TokenUsage per judge LLM call; _judge_usage() reads the
+            # count (the 10k/day-cap axis) and token totals back off it (#130).
+            token_usage_parser=get_token_usage_for_openai,
             raise_exceptions=False,
         )
+        judge_usage = _judge_usage(ragas_result)
         df = ragas_result.to_pandas().reset_index(drop=True)
         df["case_class"] = [m["case_class"] for m in sample_meta]
         df["expected_fail"] = [m["expected_fail"] for m in sample_meta]
@@ -532,6 +622,18 @@ def evaluate(dataset_path: Path, output_path: Path, split: str = "all") -> None:
     logger.info("Headline metrics: %s", metrics)
     logger.info("By case_class: %s", metrics_by_case_class)
 
+    costs = _assemble_costs(pipeline_tokens, pipeline_requests, judge_usage)
+    pl, jd = costs["pipeline"], costs["judge"]
+    logger.info(
+        "Cost: pipeline $%s (%d req) + judge $%s (%d req) = $%s (%d req total)",
+        f"{pl['usd']:.4f}" if pl["usd"] is not None else "?",
+        pl["requests"],
+        f"{jd['usd']:.4f}" if jd.get("usd") is not None else "?",
+        jd.get("requests", 0),
+        f"{costs['total_usd']:.4f}" if costs["total_usd"] is not None else "?",
+        costs["request_count"],
+    )
+
     output = {
         "timestamp": datetime.now(UTC).isoformat(),
         "dataset": _repo_relative(dataset_path),
@@ -548,10 +650,50 @@ def evaluate(dataset_path: Path, output_path: Path, split: str = "all") -> None:
         "expected_fail_metrics": expected_fail_metrics,
         "refusal_results": refusal_results,
         "per_question": per_question,
+        "costs": costs,
+        "request_count": costs["request_count"],
         "langfuse_run_name": run_name,
     }
     output_path.write_text(json.dumps(output, indent=2, default=str))
     logger.info("Results written to %s", output_path)
+
+
+def _assemble_costs(
+    pipeline_tokens: dict[str, dict[str, int]],
+    pipeline_requests: int,
+    judge_usage: dict[str, Any],
+) -> dict[str, Any]:
+    """Pipeline + judge cost / request totals for results.json (#130).
+
+    ``pipeline.usd`` is None if any model in the run is missing from the rate
+    table (an unpriced model shouldn't silently read as $0). ``request_count`` is
+    the headline number -- the daily OpenAI cap is per-request.
+    """
+    pipeline_cost = 0.0
+    priced = True
+    for model, tok in pipeline_tokens.items():
+        c = _cost_usd(model, tok["input"], tok["output"])
+        if c is None:
+            priced = False
+        else:
+            pipeline_cost += c
+    pipeline_usd = round(pipeline_cost, 4) if priced else None
+
+    judge_usd = judge_usage.get("usd") if judge_usage.get("captured") else None
+    total_usd = None
+    if pipeline_usd is not None and judge_usd is not None:
+        total_usd = round(pipeline_usd + judge_usd, 4)
+
+    return {
+        "pipeline": {
+            "usd": pipeline_usd,
+            "requests": pipeline_requests,
+            "tokens_by_model": pipeline_tokens,
+        },
+        "judge": judge_usage,
+        "total_usd": total_usd,
+        "request_count": pipeline_requests + judge_usage.get("requests", 0),
+    }
 
 
 def _repo_relative(path: Path) -> str:
