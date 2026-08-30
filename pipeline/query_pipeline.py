@@ -28,6 +28,8 @@ from pipeline.constants import (
     ANSWER_SYSTEM_PROMPT,
     CONTEXT_META_FIELDS,
     GENERATION_MAX_TOKENS,
+    METADATA_FILTER_DOCTYPE_KEYWORDS,
+    METADATA_FILTER_STATUS_KEYWORDS,
     RERANK_TOP_N,
     RETRIEVAL_TOP_K,
 )
@@ -37,18 +39,6 @@ from retrieval.reranker import Reranker
 
 if TYPE_CHECKING:
     from langfuse import Langfuse
-
-# Keywords used for heuristic doctype detection in the question text.
-_DOCTYPE_KEYWORDS: dict[str, list[str]] = {
-    "Contract": ["contract"],
-    "Terms and Conditions": ["terms and conditions"],
-}
-
-_STATUS_KEYWORDS: list[str] = [
-    "cancelled",
-    "active",
-    "unsigned",
-]
 
 
 @dataclass
@@ -191,20 +181,21 @@ class QueryPipeline:
 def _extract_filters(question: str) -> dict[str, Any]:
     """Heuristic metadata filter extraction from the question text.
 
-    Detects doctype and status keywords.  The pipeline merges this dict with
+    Detects doctype and status keywords from the (per-client configurable)
+    vocabulary in ``pipeline.constants``.  The pipeline merges this dict with
     any explicit sidebar filters from the frontend (sidebar wins on conflicts).
     """
     lower = question.lower()
     filters: dict[str, Any] = {}
 
-    for doctype, keywords in _DOCTYPE_KEYWORDS.items():
+    for doctype, keywords in METADATA_FILTER_DOCTYPE_KEYWORDS.items():
         if any(kw in lower for kw in keywords):
             filters["source_doctype"] = doctype
             break
 
-    for status in _STATUS_KEYWORDS:
-        if status in lower:
-            filters["status"] = status.capitalize()
+    for keyword, status_value in METADATA_FILTER_STATUS_KEYWORDS.items():
+        if keyword in lower:
+            filters["status"] = status_value
             break
 
     return filters

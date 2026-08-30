@@ -281,9 +281,11 @@ single-knob nudge only when a `case_class` slice fails.
 Not knobs, but genuinely per-client — and set from knowing the client's ERPNext,
 not from an eval sweep:
 
-- **Metadata filter vocabulary** — `_DOCTYPE_KEYWORDS` / `_STATUS_KEYWORDS` in
-  `pipeline/query_pipeline.py`, if the client uses custom doctypes or status
-  values. Config.
+- **Metadata filter vocabulary** — `METADATA_FILTER_DOCTYPE_KEYWORDS` /
+  `METADATA_FILTER_STATUS_KEYWORDS` env vars (`pipeline/constants.py`), if the
+  client uses custom doctype names or status values. Config, not a knob — set it
+  from knowing the client's ERPNext during the Phase 5 guided review (#135), no
+  source edit and no re-ingest.
 - **Ingestion field mapping** — whether the client's custom fields / doctypes are
   wired into `ingestion/`. An ingestion problem, not tuning.
 

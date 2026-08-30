@@ -127,6 +127,30 @@ def test_extract_filters_is_case_insensitive() -> None:
     assert result.get("source_doctype") == "Contract"
 
 
+def test_extract_filters_honours_per_client_status_vocabulary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#135: a client whose ERPNext uses different status wording overrides the
+    keyword -> status-value map via METADATA_FILTER_STATUS_KEYWORDS, no source edit."""
+    import pipeline.query_pipeline as qp
+
+    monkeypatch.setattr(qp, "METADATA_FILTER_STATUS_KEYWORDS", {"expired": "Inactive"})
+    assert _extract_filters("which agreements are expired").get("status") == "Inactive"
+    # the shipped keywords are gone once overridden
+    assert "status" not in _extract_filters("list cancelled contracts")
+
+
+def test_extract_filters_honours_per_client_doctype_vocabulary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import pipeline.query_pipeline as qp
+
+    monkeypatch.setattr(
+        qp, "METADATA_FILTER_DOCTYPE_KEYWORDS", {"Contract": ["contract", "agreement"]}
+    )
+    assert _extract_filters("what does the agreement say").get("source_doctype") == "Contract"
+
+
 # ---------------------------------------------------------------------------
 # _build_context
 # ---------------------------------------------------------------------------

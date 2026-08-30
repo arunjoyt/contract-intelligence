@@ -299,9 +299,25 @@ docker compose exec app python3 -c \
 
 ### Guided review with the client expert
 
-10–15 real questions the client's team actually asks. Run them live, eyeball answers and
-citations together. This is the default acceptance step — the repo's own `CLAUDE.md` notes the
-LLM judge is too noisy to gate on at any dataset size.
+**This is the default acceptance step** — the repo's own `CLAUDE.md` notes the LLM judge is too
+noisy to gate on at any dataset size. The formal RAGAS benchmark below is an optional, separately
+scoped add-on.
+
+- [ ] Copy `docs/templates/guided_review.md` → `evaluation/client/<client>_guided_review.md`
+  (gitignored — it names real documents) and fill in the header
+- [ ] The client expert brings **10–15 real questions** their team actually asks — mix single-clause
+  lookups, cross-document ("which of our contracts…"), and 1–2 you expect it to *refuse*
+- [ ] Run them live, score each row against the worksheet rubric (answer verdict + citation verdict)
+- [ ] **Metadata-filter vocabulary check** — does the client's ERPNext use doctype names or `status`
+  values other than the defaults (`Contract` / `Terms and Conditions`; `Cancelled` / `Active` /
+  `Unsigned`)? Check a real `status` value in Qdrant against their wording. If so, set
+  `METADATA_FILTER_DOCTYPE_KEYWORDS` / `METADATA_FILTER_STATUS_KEYWORDS` in `.env` (JSON — see the
+  Environment reference) and re-test the affected questions. No source edit, no re-ingest.
+- [ ] When a group of questions fails the same way, nudge **one knob**, in the reach order from
+  `docs/PIPELINE_TUNING.md` § Per-client tuning (`RETRIEVAL_TOP_K` → prompt vocabulary →
+  `RERANK_TOP_N`), and re-run the failing questions
+- [ ] Record the decision + any `.env` changes in the worksheet — it is the validation summary for
+  the client's deployment record
 
 ### Optional: client-specific RAGAS benchmark
 
@@ -416,6 +432,8 @@ LLM judge is too noisy to gate on at any dataset size.
 | `FRONTEND_URL` / `PUBLIC_API_URL` | client | full `https://` URLs |
 | `QUERY_REWRITE_STRATEGY` | — | default `hyde` |
 | `OPENAI_MODEL` / `EMBEDDING_MODEL` | — | defaults `gpt-4o` / `text-embedding-3-small`. Changing embedding dim → recreate collection + full re-ingest |
+| `METADATA_FILTER_DOCTYPE_KEYWORDS` | client | JSON `{"<doctype>": ["kw", …]}`. Only if the client's doctype names differ. Default: `{"Contract": ["contract"], "Terms and Conditions": ["terms and conditions"]}` |
+| `METADATA_FILTER_STATUS_KEYWORDS` | client | JSON `{"kw": "<status value>"}` — a *map*, so e.g. `{"expired": "Inactive"}`. Default: `{"cancelled": "Cancelled", "active": "Active", "unsigned": "Unsigned"}`. Set from Phase 5. |
 
 ---
 
@@ -424,7 +442,8 @@ LLM judge is too noisy to gate on at any dataset size.
 - **Role changes lag by up to 8h.** Roles are baked into the JWT at login; a revoked role still
   works until the token expires.
 - **Metadata filters are keyword-only.** Doctype and status only — no date-range parsing, no LLM
-  extraction.
+  extraction. The keyword vocabulary is per-client config (`METADATA_FILTER_*` env vars), not the
+  hardcoded default, but it stays a plain substring match.
 - **RAGAS is not in CI and not a gate.** Quality is validated manually.
 - **Single box, no HA.** Host reboot recovers automatically (`restart: unless-stopped`); a host
   failure is a restore-from-backup event.
