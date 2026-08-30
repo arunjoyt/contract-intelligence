@@ -49,24 +49,31 @@ class QueryRewriter:
         self._embedder = embedder
         self._strategy = strategy or os.environ.get("QUERY_REWRITE_STRATEGY", "hyde")
         self._client = OpenAI(api_key=api_key or os.environ["OPENAI_API_KEY"])
+        # Token usage of the most recent rewrite() chat call, in the same shape as
+        # QueryPipeline._generate's usage dict. None when no call was made. Callers
+        # read it right after rewrite() to record the rewrite step as a Langfuse
+        # `generation` with real cost (#130) -- the rewrite call was otherwise
+        # invisible in per-query cost.
+        self.last_usage: dict[str, int] | None = None
 
     def rewrite(self, query: str) -> tuple[str, list[float]]:
         """Rewrite the query and return (rewritten_text, embedding_vector).
 
         The embedding is of the rewritten text; callers use it for vector search.
         Falls back to the original query if GPT-4o returns an empty response.
+        Sets ``self.last_usage`` to this call's token usage (None if no LLM call).
         """
         if self._strategy == "none":
-            rewritten = query
+            rewritten, self.last_usage = query, None
         elif self._strategy == "step_back":
-            rewritten = self._step_back(query)
+            rewritten, self.last_usage = self._step_back(query)
         else:
-            rewritten = self._hyde(query)
+            rewritten, self.last_usage = self._hyde(query)
 
         vector = self._embedder.embed_query(rewritten)
         return rewritten, vector
 
-    def _hyde(self, query: str) -> str:
+    def _hyde(self, query: str) -> tuple[str, dict[str, int]]:
         response = self._client.chat.completions.create(
             model=REWRITE_MODEL,
             messages=[
@@ -76,9 +83,9 @@ class QueryRewriter:
             temperature=0.7,
             max_tokens=256,
         )
-        return response.choices[0].message.content or query
+        return response.choices[0].message.content or query, _usage_dict(response)
 
-    def _step_back(self, query: str) -> str:
+    def _step_back(self, query: str) -> tuple[str, dict[str, int]]:
         response = self._client.chat.completions.create(
             model=REWRITE_MODEL,
             messages=[
@@ -88,4 +95,14 @@ class QueryRewriter:
             temperature=0.3,
             max_tokens=128,
         )
-        return response.choices[0].message.content or query
+        return response.choices[0].message.content or query, _usage_dict(response)
+
+
+def _usage_dict(response) -> dict[str, int]:
+    """OpenAI chat response → the pipeline's usage shape (matches QueryPipeline._generate)."""
+    usage = response.usage
+    return {
+        "input": usage.prompt_tokens,
+        "output": usage.completion_tokens,
+        "total": usage.total_tokens,
+    }

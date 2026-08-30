@@ -7,6 +7,10 @@ requires-python = ">=3.11"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Local-only #113 tuning-sweep scripts / run archives — not shipped code (also
+# gitignored on the phase-113 branch). Kept out of lint so throwaway sweep
+# helpers don't have to meet the repo's style bar.
+extend-exclude = ["evaluation/tuning"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

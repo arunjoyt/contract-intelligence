@@ -356,16 +356,18 @@ def test_run_with_langfuse_creates_trace(monkeypatch: pytest.MonkeyPatch) -> Non
     pipeline.run("question")
 
     mock_lf.trace.assert_called_once()
-    # rewrite, filter_extraction, hybrid_search, rerank = 4 spans; generate is a
-    # separate `generation`-type observation (see test_run_with_langfuse_generation_*)
-    assert mock_trace.span.call_count >= 4
+    # filter_extraction, hybrid_search, rerank = 3 plain spans; rewrite and
+    # generate are `generation`-type observations (see test_run_with_langfuse_generation_*)
+    assert mock_trace.span.call_count >= 3
 
 
 def test_run_with_langfuse_generation_uses_generation_not_span(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The `generate` step must be a Langfuse `generation`, not a plain `span` --
-    only `generation`-type observations get auto-populated token usage/cost."""
+    """The `generate` and `rewrite` steps must be Langfuse `generation`s, not plain
+    `span`s -- only `generation`-type observations get auto-populated token
+    usage/cost, and the rewrite call (REWRITE_MODEL) was previously invisible in
+    per-query cost (#130)."""
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     mock_lf = MagicMock()
     mock_trace = MagicMock()
@@ -376,7 +378,28 @@ def test_run_with_langfuse_generation_uses_generation_not_span(
     pipeline = _make_pipeline(langfuse=mock_lf)
     pipeline.run("question")
 
-    mock_trace.generation.assert_called_once_with(name="generate", model="gpt-4o")
+    mock_trace.generation.assert_any_call(name="generate", model="gpt-4o")
+    mock_trace.generation.assert_any_call(name="rewrite", model="gpt-4o-mini")
+
+
+def test_run_records_rewrite_generation_with_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The rewrite `generation` span ends with the rewriter's last_usage, so the
+    HyDE / step-back call's token cost reaches the Langfuse trace total (#130)."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    mock_lf = MagicMock()
+    mock_trace = MagicMock()
+    mock_lf.trace.return_value = mock_trace
+    mock_trace.span.return_value = MagicMock()
+    rewrite_span = MagicMock()
+    generate_span = MagicMock()
+    mock_trace.generation.side_effect = [rewrite_span, generate_span]
+
+    pipeline = _make_pipeline(langfuse=mock_lf)
+    pipeline._rewriter.last_usage = {"input": 40, "output": 12, "total": 52}
+
+    pipeline.run("question")
+
+    assert rewrite_span.end.call_args[1]["usage"] == {"input": 40, "output": 12, "total": 52}
 
 
 def test_run_with_langfuse_generation_passes_usage(monkeypatch: pytest.MonkeyPatch) -> None:

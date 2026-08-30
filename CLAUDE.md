@@ -150,7 +150,8 @@ ERPNext --REST API (full ingest) / Webhooks (incremental)--> Ingestion --> Qdran
   `QUERY_REWRITE_STRATEGY`, on `REWRITE_MODEL` / default `gpt-4o-mini`) → `query_pipeline.py`
   (orchestrates rewrite → metadata filter extraction → hybrid search top-20 → rerank top-5 →
   `OPENAI_MODEL` generation, default `gpt-4o`, with required source citations). Every step is a
-  Langfuse child span. `OPENAI_MODEL`/`REWRITE_MODEL`/`EMBEDDING_MODEL` are centralized in
+  Langfuse child observation — `rewrite` and `generate` are `generation`s (token cost tracked),
+  the rest plain spans. `OPENAI_MODEL`/`REWRITE_MODEL`/`EMBEDDING_MODEL` are centralized in
   `config.py` (see `docs/ARCHITECTURE.md` § Model Configuration).
 - **API** (`api/main.py`): `POST /query`, `POST /webhook/erpnext`, `POST /ingest/full` (background task,
   `X-Admin-Secret`-gated), `GET /health`. Startup hook ensures the Qdrant collection exists, rebuilds the
