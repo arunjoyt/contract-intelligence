@@ -189,7 +189,8 @@ so ingestion embedding cost is tracked (see `docs/ARCHITECTURE.md` § Observabil
    query, improving recall for abstract questions; step-back rewrites the question at a higher abstraction
    level instead. The chat call runs on `REWRITE_MODEL` (default `gpt-4o-mini`), not `OPENAI_MODEL`.
 2. Metadata filter extraction (pure keyword heuristic — doctype/status only, no LLM call, no date-range
-   parsing) from the original question.
+   parsing) from the original question. The keyword vocabulary lives in `pipeline/constants.py`
+   (`METADATA_FILTER_DOCTYPE_KEYWORDS` / `METADATA_FILTER_STATUS_KEYWORDS`), env-overridable per client.
 3. `HybridSearch.search()` — BM25 + Qdrant vector search in parallel, fused via RRF, top-20.
 4. `Reranker.rerank()` — cross-encoder scores all 20 `(query, chunk)` pairs, returns top-5.
 5. GPT-4o generation with a system prompt that requires `[docname]`-style citations per claim and forbids

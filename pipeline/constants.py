@@ -12,13 +12,47 @@ sentence-transformers / qdrant-client.
 
 from __future__ import annotations
 
+import json
 import os
+from typing import Any
 
 # Hybrid-search candidate pool size, then the cross-encoder rerank budget the
 # generator actually sees. Env-overridable so a tuning pass (#113) can sweep them
 # without editing this file between runs; the defaults are the shipped values.
 RETRIEVAL_TOP_K = int(os.environ.get("RETRIEVAL_TOP_K", "20"))
 RERANK_TOP_N = int(os.environ.get("RERANK_TOP_N", "5"))
+
+
+def _json_env(name: str, default: str) -> Any:
+    """Parse a JSON-valued env var, failing fast with a pointed message.
+
+    Used for the metadata-filter vocabulary below -- the one part of the pipeline
+    that is genuinely per-client (a client with a customized Contract doctype or
+    different status values), so it must be configurable without editing source.
+    """
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return json.loads(default)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{name} is not valid JSON: {exc}") from exc
+
+
+# Heuristic metadata-filter vocabulary for _extract_filters() in query_pipeline.py
+# -- a keyword in the question text pins source_doctype / status before retrieval.
+# Per-client config (see docs/CLIENT_DEPLOYMENT_RUNBOOK.md § Phase 5): override
+# when the client uses custom doctype names or status values. The status form is
+# a {keyword: status-value} map, not a list, so a client can point e.g. "expired"
+# at "Inactive". Defaults reproduce the previous hardcoded behaviour exactly.
+METADATA_FILTER_DOCTYPE_KEYWORDS: dict[str, list[str]] = _json_env(
+    "METADATA_FILTER_DOCTYPE_KEYWORDS",
+    '{"Contract": ["contract"], "Terms and Conditions": ["terms and conditions"]}',
+)
+METADATA_FILTER_STATUS_KEYWORDS: dict[str, str] = _json_env(
+    "METADATA_FILTER_STATUS_KEYWORDS",
+    '{"cancelled": "Cancelled", "active": "Active", "unsigned": "Unsigned"}',
+)
 
 # Generation call.
 GENERATION_MAX_TOKENS = 1024
