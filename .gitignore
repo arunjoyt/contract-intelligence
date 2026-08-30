@@ -54,3 +54,6 @@ test-results/
 docker-compose.override.yml
 docker-compose.local-prod.yml
 nginx/certs/
+
+# #113 tuning-sweep run archives (recovered from Langfuse / written by future sweep runs)
+evaluation/tuning/
