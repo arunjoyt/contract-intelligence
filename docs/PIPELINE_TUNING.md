@@ -1,14 +1,23 @@
 # Pipeline Tuning — every knob from chunk to answer
 
-How the retrieval and generation knobs would be tuned properly. Right now they all
-hold conventional "retrieve wide, rerank narrow" defaults — **not values tuned on
-this corpus.** The eval harness that could tune them (`evaluation/evaluate.py`,
-per-`case_class` slicing) exists as of #102; #112 grew the dataset to 92 entries
-with a dev/test split. That is enough to tune the generation-side knobs on the
-judge headline. The ~38-clause demo corpus is too small to *separate* the
-retrieval-only knobs, and expanding it was considered and rejected — those knobs
-stay at conventional defaults and are owned by per-client validation instead. See
+How the retrieval and generation knobs would be tuned properly. The eval harness
+that could tune them (`evaluation/evaluate.py`, per-`case_class` slicing) exists as
+of #102; #112 grew the dataset to 92 entries with a dev/test split. That is enough
+to tune the generation-side knobs on the judge headline. The ~38-clause demo
+corpus is too small to *separate* the retrieval-only knobs, and expanding it was
+considered and rejected — those knobs stay at conventional defaults and are owned
+by per-client validation instead. See
 [the corpus-size ceiling](#the-corpus-size-ceiling--what-113-can-and-cannot-tune-here).
+
+> **#113 outcome (closed 2026-08-31): conventional defaults retained.** The
+> generation-side pass ran Step A (`QUERY_REWRITE_STRATEGY`) and Step C
+> (`RERANK_TOP_N`) on `--split dev` with 3× replicates and paired Wilcoxon.
+> Neither knob showed an effect that clears the RAGAS judge's ~±0.05 run-to-run
+> noise band on this corpus — `hyde` and `RERANK_TOP_N=5` stay as shipped. The
+> binding constraint is judge variance, not tuning effort. See the **Outcome**
+> callouts under Steps A and C; runs archived in `evaluation/tuning/`
+> (gitignored). Generation-model swap (`gpt-4o` → `gpt-4o-mini`) is split out to
+> **#132**.
 
 This doc walks the whole pipeline order: ingest → embed → rewrite → retrieve →
 rerank → generate. It describes the **one-time** tuning pass on the reference
@@ -178,6 +187,17 @@ noise of the best.
 classifier that picks the strategy, not one global env var. Record the decision as
 an ADR (`docs/adr/`).
 
+> **Outcome (2026-08-29, judge headline).** `hyde` vs `none` vs `step_back` on
+> `--split dev`, 3 replicates each of `hyde`/`none`, paired Wilcoxon: **no
+> separable difference** on any metric or slice (every p ≥ 0.34; largest effect
+> `step_back` faithfulness +0.026 vs `hyde`, smaller than the 0.049 replicate
+> noise band). The ~38-clause corpus can't exercise HyDE's actual purpose
+> (recall on no-anchor questions over a large corpus). **`hyde` kept as the
+> shipped default** — it's a README/demo capability and costs only ~1.5 s
+> latency + one `gpt-4o-mini` call for no measurable quality change here.
+> Re-evaluate if the reference corpus ever grows. Runs archived in
+> `evaluation/tuning/` (gitignored).
+
 ## Step B — `RETRIEVAL_TOP_K` (retrieval-only)
 
 The reranker can only reorder what it is handed; it cannot recover a chunk that
@@ -226,6 +246,26 @@ contracts" drops the 3rd match — see `docs/ARCHITECTURE.md` § Known Limitatio
 Raising `top_n` is the *wrong* fix there; that needs a separate metadata-filtered
 retrieval path (#45). Enumeration is scoped out rather than distorting `top_n` for
 the common case.
+
+> **Outcome (2026-08-31, replicated check).** A 2026-08-29 single run on the
+> `none` arm had `top_n=8` up ~0.04–0.05 on `answer_relevancy` / `context_recall`
+> vs `top_n=5` — the one live lead out of the whole pass. It **did not
+> reproduce.** 3× `top_n=5` + 3× `top_n=8` on the shipped `hyde` default,
+> `--split dev`, replicate-averaged per question, paired Wilcoxon over the 26
+> headline questions:
+>
+> | metric | mean(5) | mean(8) | Δ (8−5) | p |
+> |---|---|---|---|---|
+> | answer_relevancy | 0.913 | 0.902 | **−0.011** | 0.23 |
+> | context_recall | 0.867 | 0.876 | +0.010 | 1.00 |
+> | faithfulness | 0.916 | 0.908 | −0.008 | 0.59 |
+> | context_precision | 0.956 | 0.942 | −0.015 | 0.12 |
+>
+> Nothing clears the noise band; `answer_relevancy` (the low-variance metric)
+> trends the wrong way. **`RERANK_TOP_N` stays 5.** It remains the first
+> per-client knob to try when a `precision-multi` / `showcase` slice underperforms
+> (see § Per-client tuning). Runs + analysis in `evaluation/tuning/` (gitignored:
+> `_run_topn_check.sh`, `_paired_topn.py`).
 
 ## Step D — `OPENAI_MODEL` and the system prompt (generator-dependent)
 
