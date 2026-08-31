@@ -3,47 +3,45 @@
 ## System Overview
 
 ```
-ERPNext
-  │  REST API (initial full ingest)
-  │  Webhooks (incremental updates)
-  ▼
-┌─────────────────────────────────┐
-│        Ingestion Layer          │
-│  erpnext_client → document_     │
-│  parser → chunker → embedder    │
-└──────────────┬──────────────────┘
-               │ upsert (idempotent, by docname+chunk_index)
-               ▼
-┌──────────────────────────────────┐
-│           Qdrant                 │
-│  Collection: contract            │
-│  Indexed payload: source_doctype,│
-│  supplier, status, start_date,   │
-│  end_date                        │
-└──────────────┬───────────────────┘
-               │ queried by step 3 below (vector + BM25 lookup)
-               ▼
-┌──────────────────────────────────┐
-│      Query Pipeline (per request)│
-│  1. QueryRewriter (HyDE/step-back)│  ← entry point, runs before retrieval
-│  2. filter extraction (keywords) │
-│  3. HybridSearch → RRF → top-20  │
-│  4. Cross-encoder rerank → top-5 │
-│  5. Prompt builder → GPT-4o      │
-│  6. Answer + source citations    │
-└──────────┬──────────┬────────────┘
-           │          │ Langfuse spans
-           ▼          ▼
-        FastAPI    Langfuse
-        /query      (trace)
-           │
-           ▼
-        Streamlit
+                                        Streamlit  ──►  FastAPI /query
+                                                            │
+                                                     invoke │
+                                                            ▼
+ERPNext                                 ┌───────────────────┬───────────────┐
+  │  REST API (initial full ingest)     │     Query Pipeline (per request)  │
+  │  Webhooks (incremental updates)     │  1. QueryRewriter (HyDE/step-back) │
+  ▼                                     │     → embed the rewritten text     │
+┌─────────────────────────────────┐     │  2. filter extraction (keywords)   │
+│        Ingestion Layer          │     │  3. HybridSearch → RRF → top-20    │
+│  erpnext_client → document_     │     │  4. Cross-encoder rerank → top-5   │
+│  parser → chunker → embedder    │     │  5. Prompt builder → GPT-4o        │
+└──────────────┬──────────────────┘     │  6. Answer + source citations      │
+               │ upsert                 └────────┬─────────────────┬────────┘
+               │ (idempotent, by          vector │                 │ Langfuse span
+               │  docname+chunk_index)    search │                 ▼ per step;
+               │                          (step3)│           Langfuse   rewrite +
+               ▼                                 │           (trace)    generate =
+┌──────────────┬─────────────────────────────────┴─┐                   generation
+│           Qdrant                                 │
+│  Collection: contract                            │
+│  Indexed payload: source_doctype, supplier,      │
+│  status, start_date, end_date                    │
+└──────────────────────────────────────────────────┘
+
+Answer + citations flow back the same path: Pipeline → FastAPI → Streamlit.
+The BM25 (lexical) leg of step 3 is a separate in-memory rank_bm25 index,
+rebuilt from Qdrant at API startup and after every webhook — it is not a
+Qdrant query (issue #97 tracks moving it into Qdrant sparse vectors).
+Ingestion is traced like the query path (embed = generation), so ingestion
+embedding cost also shows up in Langfuse.
 ```
 
-The steps are execution order. Retrieval is *inside* the pipeline (step 3), driven
-by the rewritten query from step 1 — not a separate stage that runs first and hands
-the pipeline a top-5. See "Query Pipeline — Step by Step" below.
+The steps are execution order. FastAPI is the entry point — Streamlit calls
+`/query`, FastAPI invokes the pipeline and returns the answer. Retrieval is
+*inside* the pipeline (step 3), driven by the rewritten query from step 1 — not a
+separate stage that runs first and hands the pipeline a top-5. Only the dense leg
+of step 3 touches Qdrant; the lexical (BM25) leg is served from memory. See "Query
+Pipeline — Step by Step" below.
 
 ## Query Pipeline — Step by Step
 
@@ -52,7 +50,7 @@ the pipeline a top-5. See "Query Pipeline — Step by Step" below.
 3. **Hybrid search** — BM25 (lexical) and Qdrant vector search run in parallel. Results are fused with Reciprocal Rank Fusion (`k=60`), returning 20 candidates. Metadata filters (supplier, doctype, status) are honoured by **both** legs: Qdrant filters during ANN traversal; `rank_bm25` has no filter hook, so the ranked BM25 list is filtered in Python before fusion (`_passes_filter`, mirroring `VectorStore._build_filter`). Every chunk in the fused set therefore satisfies the filter — it's a hard constraint (#98).
 4. **Cross-encoder reranking** — `ms-marco-MiniLM` scores all 20 `(query, chunk)` pairs and returns the top 5.
 5. **Generation** — GPT-4o receives the top-5 chunks as context with a structured prompt that requires source citations.
-6. **Tracing** — each step is a Langfuse child span; the full trace is linked to the question.
+6. **Tracing** — each step is a Langfuse child span; `rewrite` and `generate` are **generations** (token cost auto-computed), the rest plain spans. The full trace links to the question, and ingestion is traced the same way — see [§ Observability](#observability).
 
 ### Orchestration — straight-line Python, not LangGraph
 

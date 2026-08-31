@@ -22,6 +22,8 @@ architecture:
 ```mermaid
 flowchart LR
     ERP[ERPNext]
+    UI[Streamlit]
+    API[[FastAPI /query]]
 
     subgraph ING[Ingestion]
         direction TB
@@ -32,28 +34,37 @@ flowchart LR
 
     subgraph QUERY[Query pipeline]
         direction TB
-        REWRITE[HyDE / step-back rewrite] --> SEARCH[BM25 + vector search → RRF fusion → top-20]
+        REWRITE["HyDE / step-back rewrite<br/>→ embed rewritten text"] --> FILT["metadata filter extraction<br/>keyword scan, no LLM"]
+        FILT --> SEARCH["vector search Qdrant ∥ BM25 in-memory<br/>→ RRF fusion → top-20"]
         SEARCH --> RERANK[cross-encoder rerank → top-5]
         RERANK --> GEN[GPT-4o generate + cite]
     end
 
-    API[[FastAPI /query]]
-    UI[Streamlit]
     LF{{Langfuse}}
 
     ERP -- "REST + webhooks" --> ING
     ING -- "idempotent upsert" --> QD
-    QUERY <-- "vector + BM25 lookup" --> QD
-    QUERY --> API
-    API --> UI
-    QUERY -. "trace" .-> LF
+
+    UI -- "POST /query (question + sidebar filters)" --> API
+    API -- "invoke" --> QUERY
+    QUERY -- "answer + citations" --> API
+    API -- "response" --> UI
+
+    SEARCH -- "vector search (dense leg only)" --> QD
+    QD -. "feeds in-memory BM25 index<br/>at startup + per webhook" .-> SEARCH
+
+    ING -. "trace (embed = generation)" .-> LF
+    QUERY -. "trace (rewrite + generate = generation)" .-> LF
 ```
 
-The subgraphs above are execution order, not code layout: query rewriting is the
-entry point of every request and runs *before* retrieval — the rewritten text is
-what BM25 and vector search actually match on. Retrieval then narrows top-20 →
-top-5 (rerank) before generation. See `pipeline/query_pipeline.py` and
-`docs/ARCHITECTURE.md` for the full data-flow.
+The subgraphs above are execution order, not code layout. FastAPI is the entry
+point — Streamlit calls `/query`, FastAPI invokes the pipeline and hands the answer
+back. Query rewriting runs *before* retrieval — the rewritten text is what vector
+search actually matches on. Only the dense leg of hybrid search hits Qdrant; the
+lexical (BM25) leg is an in-memory index rebuilt from Qdrant at startup and on
+every webhook (#97 tracks moving it into Qdrant sparse vectors). Retrieval then
+narrows top-20 → top-5 (rerank) before generation. See `pipeline/query_pipeline.py`
+and `docs/ARCHITECTURE.md` for the full data-flow.
 
 See `docs/ARCHITECTURE.md` for the full data-flow and schema breakdown.
 
