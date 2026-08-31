@@ -1421,7 +1421,14 @@ _LF_HOST = os.getenv("LANGFUSE_HOST", "http://localhost:3000")
 _LF_PUBLIC = os.getenv("LANGFUSE_PUBLIC_KEY", "")
 _LF_SECRET = os.getenv("LANGFUSE_SECRET_KEY", "")
 
-_EXPECTED_SPANS = {"rewrite", "filter_extraction", "hybrid_search", "rerank", "generate"}
+_EXPECTED_SPANS = {
+    "rewrite",
+    "embed_query",
+    "filter_extraction",
+    "hybrid_search",
+    "rerank",
+    "generate",
+}
 _LF_QUESTION = "What are the payment terms for our active contracts?"
 
 
@@ -1532,7 +1539,7 @@ def test_langfuse_trace_created_for_query(lf_trace_result) -> None:
 
 @live
 @pytest.mark.langfuse
-def test_langfuse_trace_has_all_five_spans(lf_trace_result) -> None:
+def test_langfuse_trace_has_all_expected_spans(lf_trace_result) -> None:
     trace_id, _, _ = lf_trace_result
     obs = _fetch_observations(trace_id)
     span_names = {o["name"] for o in obs}

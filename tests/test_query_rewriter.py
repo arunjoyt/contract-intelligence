@@ -39,6 +39,7 @@ def _make_openai_response(
 def _make_embedder(vector: list[float] = FAKE_VECTOR) -> MagicMock:
     e = MagicMock()
     e.embed_query.return_value = vector
+    e.embed_query_with_usage.return_value = (vector, {"input": 12, "total": 12})
     return e
 
 
@@ -107,7 +108,7 @@ def test_hyde_embeds_gpt_response_not_original_query(monkeypatch: pytest.MonkeyP
 
     r.rewrite("What are the payment terms?")
 
-    embedder.embed_query.assert_called_once_with(
+    embedder.embed_query_with_usage.assert_called_once_with(
         "This Purchase Order was issued to Acme on Net 30 terms."
     )
 
@@ -144,7 +145,7 @@ def test_hyde_falls_back_to_original_query_on_empty_response(
     text, _ = r.rewrite("original query")
 
     assert text == "original query"
-    embedder.embed_query.assert_called_once_with("original query")
+    embedder.embed_query_with_usage.assert_called_once_with("original query")
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +188,9 @@ def test_step_back_embeds_rewritten_question(monkeypatch: pytest.MonkeyPatch) ->
 
     r.rewrite("What is the payment term for PO-001?")
 
-    embedder.embed_query.assert_called_once_with("What are general procurement payment terms?")
+    embedder.embed_query_with_usage.assert_called_once_with(
+        "What are general procurement payment terms?"
+    )
 
 
 def test_step_back_uses_lower_temperature(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -242,7 +245,7 @@ def test_none_strategy_embeds_raw_query_and_makes_no_llm_call(
 
     assert text == "What are the payment terms for Acme?"
     assert vector == FAKE_VECTOR
-    embedder.embed_query.assert_called_once_with("What are the payment terms for Acme?")
+    embedder.embed_query_with_usage.assert_called_once_with("What are the payment terms for Acme?")
     mock_client.chat.completions.create.assert_not_called()
 
 
@@ -297,3 +300,62 @@ def test_rewrite_records_last_usage(monkeypatch: pytest.MonkeyPatch) -> None:
     r.rewrite("query")
 
     assert r.last_usage == {"input": 42, "output": 8, "total": 50}
+
+
+# ---------------------------------------------------------------------------
+# rewrite_text / embed split (#138)
+# ---------------------------------------------------------------------------
+
+
+def test_rewrite_text_does_not_embed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """rewrite_text is chat-only -- the embed is a separate step so the pipeline
+    can trace it on its own (#138)."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    embedder = _make_embedder()
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = _make_openai_response("hypothetical doc")
+
+    r = QueryRewriter(embedder=embedder, strategy="hyde")
+    r._client = mock_client
+
+    text = r.rewrite_text("What are the payment terms?")
+
+    assert text == "hypothetical doc"
+    embedder.embed_query_with_usage.assert_not_called()
+    embedder.embed_query.assert_not_called()
+
+
+def test_rewrite_text_none_strategy_returns_query_and_makes_no_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    embedder = _make_embedder()
+    mock_client = MagicMock()
+
+    r = QueryRewriter(embedder=embedder, strategy="none")
+    r._client = mock_client
+
+    text = r.rewrite_text("What are the payment terms?")
+
+    assert text == "What are the payment terms?"
+    assert r.last_usage is None
+    mock_client.chat.completions.create.assert_not_called()
+
+
+def test_embed_records_last_embed_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    embedder = _make_embedder()
+    embedder.embed_query_with_usage.return_value = ([0.5] * 1536, {"input": 9, "total": 9})
+
+    r = QueryRewriter(embedder=embedder, strategy="hyde")
+
+    vector = r.embed("some text")
+
+    assert vector == [0.5] * 1536
+    assert r.last_embed_usage == {"input": 9, "total": 9}
+
+
+def test_strategy_property_exposes_configured_strategy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    r = QueryRewriter(embedder=_make_embedder(), strategy="step_back")
+    assert r.strategy == "step_back"

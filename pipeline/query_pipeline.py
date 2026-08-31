@@ -1,17 +1,20 @@
 """Query orchestration pipeline.
 
 Wraps the full request-response cycle for a single user question:
-  1. QueryRewriter.rewrite()       → rewritten text + query vector
-  2. _extract_filters()            → metadata filter dict (heuristic)
-  3. HybridSearch.search()         → top-20 candidate chunks
-  4. Reranker.rerank()             → top-5 chunks
-  5. GPT-4o generation             → answer + [docname] citations
-  6. _parse_sources()              → structured SourceDoc list
+  1. QueryRewriter.rewrite_text()  → rewritten text (chat only)
+  2. QueryRewriter.embed()         → query vector (embedding only)
+  3. _extract_filters()            → metadata filter dict (heuristic)
+  4. HybridSearch.search()         → top-20 candidate chunks (dense leg reuses the
+                                     vector from step 2 -- no second embed call)
+  5. Reranker.rerank()             → top-5 chunks
+  6. GPT-4o generation             → answer + [docname] citations
+  7. _parse_sources()              → structured SourceDoc list
 
 Every step is wrapped in a Langfuse child observation when a Langfuse instance is
-provided -- ``rewrite`` and ``generate`` as ``generation``s (so their token cost
-is tracked), the rest as plain spans.  Passing ``langfuse=None`` disables tracing
-entirely so the pipeline works without Langfuse credentials.
+provided -- ``rewrite``, ``embed_query`` and ``generate`` as ``generation``s (so
+their token cost is tracked), the rest as plain spans.  ``rewrite`` is skipped
+for ``QUERY_REWRITE_STRATEGY=none`` (no LLM call).  Passing ``langfuse=None``
+disables tracing entirely so the pipeline works without Langfuse credentials.
 """
 
 from __future__ import annotations
@@ -23,7 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from openai import OpenAI
 
-from config import OPENAI_MODEL, REWRITE_MODEL
+from config import EMBEDDING_MODEL, OPENAI_MODEL, REWRITE_MODEL
 from pipeline.constants import (
     ANSWER_SYSTEM_PROMPT,
     CONTEXT_META_FIELDS,
@@ -79,7 +82,7 @@ class QueryPipeline:
         )
 
         try:
-            rewritten = self._rewrite(trace, question)
+            rewritten, query_vector = self._rewrite_and_embed(trace, question)
 
             extracted = self._span(trace, "filter_extraction", lambda: _extract_filters(question))
             merged_dict = {**(extracted or {}), **(filters or {})}
@@ -88,7 +91,9 @@ class QueryPipeline:
             candidates = self._span(
                 trace,
                 "hybrid_search",
-                lambda: self._hybrid_search.search(rewritten, merged, top_k=RETRIEVAL_TOP_K),
+                lambda: self._hybrid_search.search(
+                    rewritten, merged, top_k=RETRIEVAL_TOP_K, query_vector=query_vector
+                ),
                 summarize=_docnames,
             )
 
@@ -122,23 +127,49 @@ class QueryPipeline:
                 trace.update(level="ERROR")
             raise
 
-    def _rewrite(self, trace: Any, question: str) -> str:
-        """Run the query rewrite, recording it as a Langfuse `generation` so its
-        REWRITE_MODEL token cost lands in the trace's total (#130). Only the final
-        answer call used to be a generation, so per-query cost hid the HyDE /
-        step-back call entirely.
+    def _rewrite_and_embed(self, trace: Any, question: str) -> tuple[str, list[float]]:
+        """Rewrite the question (chat) and embed the result, as two separate
+        Langfuse `generation`s.
+
+        - ``rewrite`` (REWRITE_MODEL) -- skipped entirely for
+          ``QUERY_REWRITE_STRATEGY=none``, which makes no LLM call.
+        - ``embed_query`` (EMBEDDING_MODEL) -- always runs. Previously this embed
+          happened inside ``QueryRewriter.rewrite`` and its latency/cost was
+          bundled into the ``rewrite`` span; now it is attributable on its own,
+          and the vector is threaded into ``HybridSearch.search`` so the dense
+          leg does not embed the same text a second time (#138).
+
+        Recording both as `generation`s keeps their token cost in the trace total
+        (#130) -- the query embed rounds to ~$0 but completes the picture.
         """
-        if trace is None:
-            rewritten, _vector = self._rewriter.rewrite(question)
-            return rewritten
+        rewritten = self._traced_rewrite_text(trace, question)
+        query_vector = self._traced_embed(trace, rewritten)
+        return rewritten, query_vector
+
+    def _traced_rewrite_text(self, trace: Any, question: str) -> str:
+        if trace is None or self._rewriter.strategy == "none":
+            return self._rewriter.rewrite_text(question)
 
         rewrite_span = trace.generation(name="rewrite", model=REWRITE_MODEL)
         try:
-            rewritten, _vector = self._rewriter.rewrite(question)
+            rewritten = self._rewriter.rewrite_text(question)
             rewrite_span.end(output=rewritten, usage=self._rewriter.last_usage)
             return rewritten
         except Exception:
             rewrite_span.end(level="ERROR")
+            raise
+
+    def _traced_embed(self, trace: Any, text: str) -> list[float]:
+        if trace is None:
+            return self._rewriter.embed(text)
+
+        embed_span = trace.generation(name="embed_query", model=EMBEDDING_MODEL)
+        try:
+            vector = self._rewriter.embed(text)
+            embed_span.end(usage=self._rewriter.last_embed_usage)
+            return vector
+        except Exception:
+            embed_span.end(level="ERROR")
             raise
 
     def _generate(self, question: str, context: str) -> tuple[str, dict[str, int]]:

@@ -36,7 +36,7 @@ Per-stage and end-to-end latency, 53-question `--split test` run:
 
 | Stage | Type | n | p50 | p95 | mean | Notes |
 |---|---|---|---|---|---|---|
-| `rewrite` | generation | 53 | 0.156 s | 0.176 s | 0.160 s | one `gpt-4o-mini` chat call (HyDE) |
+| `rewrite` | generation | 53 | 0.156 s | 0.176 s | 0.160 s | one `gpt-4o-mini` chat call (HyDE) **+ one `text-embedding-3-small` call** on this build — #138 later split that embed into its own `embed_query` generation (~0.15–0.2 s), so on current builds `rewrite` is chat-only and `embed_query` is a sibling span; end-to-end is unchanged minus one now-removed duplicate embed |
 | `filter_extraction` | span | — | — | — | — | **not measured** — the eval harness skips it. In the `query` pipeline it is a synchronous keyword scan of the question string (`_extract_filters`), no I/O, sub-millisecond |
 | `hybrid_search` | span | 53 | 0.166 s | 0.193 s | 0.168 s | BM25 (in-memory) ∥ Qdrant vector search, RRF fused, top-20 |
 | `rerank` | span | 53 | 0.150 s | 0.197 s | 0.166 s | cross-encoder over 20 `(query, chunk)` pairs on CPU, top-5 |

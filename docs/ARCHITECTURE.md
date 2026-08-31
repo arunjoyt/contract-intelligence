@@ -10,7 +10,7 @@
 ERPNext                                 ┌───────────────────┬───────────────┐
   │  REST API (initial full ingest)     │     Query Pipeline (per request)  │
   │  Webhooks (incremental updates)     │  1. QueryRewriter (HyDE/step-back) │
-  ▼                                     │     → embed the rewritten text     │
+  ▼                                     │     → embed once, reuse for step 3 │
 ┌─────────────────────────────────┐     │  2. filter extraction (keywords)   │
 │        Ingestion Layer          │     │  3. HybridSearch → RRF → top-20    │
 │  erpnext_client → document_     │     │  4. Cross-encoder rerank → top-5   │
@@ -19,10 +19,10 @@ ERPNext                                 ┌────────────�
                │ upsert                 └────────┬─────────────────┬────────┘
                │ (idempotent, by          vector │                 │ Langfuse span
                │  docname+chunk_index)    search │                 ▼ per step;
-               │                          (step3)│           Langfuse   rewrite +
-               ▼                                 │           (trace)    generate =
-┌──────────────┬─────────────────────────────────┴─┐                   generation
-│           Qdrant                                 │
+               │                          (step3)│           Langfuse   rewrite,
+               ▼                                 │           (trace)    embed_query,
+┌──────────────┬─────────────────────────────────┴─┐                   generate =
+│           Qdrant                                 │                   generations
 │  Collection: contract                            │
 │  Indexed payload: source_doctype, supplier,      │
 │  status, start_date, end_date                    │
@@ -45,12 +45,12 @@ Pipeline — Step by Step" below.
 
 ## Query Pipeline — Step by Step
 
-1. **Query rewriting** — HyDE generates a hypothetical answer; its embedding becomes the query vector. This improves recall for abstract questions.
+1. **Query rewriting** — HyDE generates a hypothetical answer (chat only); the rewritten text is then embedded once (`QueryRewriter.embed`) and that single vector is reused for the dense leg of step 3 — no second embedding call (#138). This improves recall for abstract questions.
 2. **Metadata filter extraction** — pure keyword matching (`_extract_filters()` in `query_pipeline.py`) against the doctype and status keyword vocabulary in `pipeline/constants.py` (`METADATA_FILTER_DOCTYPE_KEYWORDS` / `METADATA_FILTER_STATUS_KEYWORDS`, env-overridable per client — #135). No LLM call and no date-range parsing — only `source_doctype` and `status` are ever set this way; date/supplier filters come solely from the frontend sidebar.
 3. **Hybrid search** — BM25 (lexical) and Qdrant vector search run in parallel. Results are fused with Reciprocal Rank Fusion (`k=60`), returning 20 candidates. Metadata filters (supplier, doctype, status) are honoured by **both** legs: Qdrant filters during ANN traversal; `rank_bm25` has no filter hook, so the ranked BM25 list is filtered in Python before fusion (`_passes_filter`, mirroring `VectorStore._build_filter`). Every chunk in the fused set therefore satisfies the filter — it's a hard constraint (#98).
 4. **Cross-encoder reranking** — `ms-marco-MiniLM` scores all 20 `(query, chunk)` pairs and returns the top 5.
 5. **Generation** — GPT-4o receives the top-5 chunks as context with a structured prompt that requires source citations.
-6. **Tracing** — each step is a Langfuse child span; `rewrite` and `generate` are **generations** (token cost auto-computed), the rest plain spans. The full trace links to the question, and ingestion is traced the same way — see [§ Observability](#observability).
+6. **Tracing** — each step is a Langfuse child span; `rewrite`, `embed_query` and `generate` are **generations** (token cost auto-computed), the rest plain spans. The full trace links to the question, and ingestion is traced the same way — see [§ Observability](#observability).
 
 ### Orchestration — straight-line Python, not LangGraph
 
@@ -265,6 +265,7 @@ Every query creates a Langfuse trace with the following child observations:
 | Observation | Type | Input captured | Output captured |
 |---|---|---|---|
 | `rewrite` | generation | original question | rewritten text (`usage` from the REWRITE_MODEL call) |
+| `embed_query` | generation | — | — (`usage` from the EMBEDDING_MODEL call) |
 | `filter_extraction` | span | original question | `{source_doctype?, status?}` dict |
 | `hybrid_search` | span | rewritten query + filters | list of 20 scored chunks |
 | `rerank` | span | original question + 20 candidates | top-5 re-scored chunks |
@@ -272,7 +273,9 @@ Every query creates a Langfuse trace with the following child observations:
 
 The trace root carries `input.question` and `output.{answer, source_count}`. If any step raises, the failing span is ended with `level="ERROR"` (the root `trace.update(level=...)` call is a historical no-op — Langfuse traces have no `level` field, only observations do).
 
-`generate` and `rewrite` are Langfuse **generations** (not plain spans) — each is created with `trace.generation(model=...)` and passes `usage={"input", "output", "total"}` (from the OpenAI response's `.usage`) to `end()`. Only `generation`-type observations get token counts and cost auto-computed by Langfuse; a plain span just stores whatever input/output you hand it (see PR [#87](https://github.com/arunjoyt/contract-intelligence/pull/87), issue #81). `rewrite` became a generation in #130 — the HyDE / step-back call (`REWRITE_MODEL`, `gpt-4o-mini`) was otherwise a plain span, so the trace's `totalCost` reflected only the `gpt-4o` answer call and understated cost/query. A rewrite strategy that makes no LLM call ends the generation with no `usage`.
+`generate`, `rewrite` and `embed_query` are Langfuse **generations** (not plain spans) — each is created with `trace.generation(model=...)` and passes `usage` (from the OpenAI response's `.usage`) to `end()`. Only `generation`-type observations get token counts and cost auto-computed by Langfuse; a plain span just stores whatever input/output you hand it (see PR [#87](https://github.com/arunjoyt/contract-intelligence/pull/87), issue #81). `rewrite` became a generation in #130 — the HyDE / step-back call (`REWRITE_MODEL`, `gpt-4o-mini`) was otherwise a plain span, so the trace's `totalCost` reflected only the `gpt-4o` answer call and understated cost/query. A rewrite strategy that makes no LLM call (`QUERY_REWRITE_STRATEGY=none`) emits **no** `rewrite` generation at all.
+
+`embed_query` was split out in #130's follow-up #138 — the query embedding (`EMBEDDING_MODEL`, `text-embedding-3-small`) used to happen *inside* `QueryRewriter.rewrite`, so its latency and any silent 429 retry were bundled into the `rewrite` span. It is now its own generation, and the vector it computes is threaded into `HybridSearch.search` (which previously re-embedded the identical string for its dense leg — a genuine second round-trip). `usage` has no `"output"` key (the embeddings API reports no completion tokens); the dollar cost rounds to ~$0/query.
 
 ### Ingestion traces
 
@@ -311,9 +314,9 @@ UI reads high; `results.json`'s `costs` block (#130) uses current rates.
 4. Send a query: `curl -s -X POST http://localhost:8000/query -H 'Content-Type: application/json' -d '{"question":"What are the payment terms for our active contracts?"}'`
 5. In the Langfuse UI → **Traces** → select the new trace and verify:
    - Root trace `name` is `query`; `input.question` matches the sent question
-   - Five child observations appear: `rewrite`, `filter_extraction`, `hybrid_search`, `rerank`, `generate`
+   - Six child observations appear: `rewrite`, `embed_query`, `filter_extraction`, `hybrid_search`, `rerank`, `generate` (no `rewrite` when `QUERY_REWRITE_STRATEGY=none`)
    - Each has a non-zero duration and no error level
-   - `generate` and `rewrite` both show non-zero `Total tokens` and a computed cost (both are `generation`s, not plain spans); the trace `totalCost` is their sum
+   - `generate`, `rewrite` and `embed_query` all show non-zero `Total tokens` (all three are `generation`s, not plain spans); `generate` + `rewrite` dominate the trace `totalCost`, `embed_query` rounds to ~$0
    - Root trace `output.answer` is non-empty and contains at least one `[docname]`-style citation
    - On a forced error, `level` is `ERROR` on the failing span and propagates to the root trace
 6. Trigger an ingestion path and check its trace:

@@ -57,3 +57,15 @@ class Embedder:
     def embed_query(self, text: str) -> list[float]:
         """Embed a single query string."""
         return self.embed_texts([text])[0]
+
+    def embed_query_with_usage(self, text: str) -> tuple[list[float], dict[str, int]]:
+        """Like `embed_query`, but also return this call's token usage as
+        ``{"input", "total"}`` (the embeddings API reports no ``completion_tokens``).
+
+        Used by the query path (`QueryRewriter.embed`) to record the single query
+        embedding as its own Langfuse `generation`, the same way ingestion records
+        its embed step -- so the query embed is attributable separately from the
+        rewrite chat call (#138).
+        """
+        vectors, usage = self.embed_texts_with_usage([text])
+        return vectors[0], usage

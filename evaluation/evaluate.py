@@ -106,10 +106,13 @@ def _cost_usd(model: str, input_tokens: int, output_tokens: int) -> float | None
 
 
 def _add_tokens(acc: dict[str, dict[str, int]], model: str, usage: dict[str, int]) -> None:
-    """Fold one call's ``{input, output, ...}`` usage into a per-model accumulator."""
+    """Fold one call's ``{input, output, ...}`` usage into a per-model accumulator.
+
+    ``output`` is optional -- the embeddings API reports no completion tokens.
+    """
     slot = acc.setdefault(model, {"input": 0, "output": 0})
     slot["input"] += int(usage["input"])
-    slot["output"] += int(usage["output"])
+    slot["output"] += int(usage.get("output", 0))
 
 
 def _judge_usage(ragas_result: Any) -> dict[str, Any]:
@@ -302,11 +305,16 @@ def _run_question(
 ) -> tuple[str, list[str], dict[str, Any]]:
     """Return (answer, retrieved_contexts, usage) in a single pipeline pass.
 
-    ``usage`` is ``{"rewrite": {...} | None, "generate": {...}}`` in the pipeline's
-    usage shape -- the caller prices and counts it (#130). The rewrite call was
-    previously wrapped in a plain span with no ``model``/``usage``, so its
-    ``REWRITE_MODEL`` cost never reached Langfuse's total; it is a ``generation``
-    now, matching the answer call.
+    ``usage`` is ``{"rewrite": {...} | None, "embed": {...}, "generate": {...}}``
+    in the pipeline's usage shape -- the caller prices and counts it (#130). The
+    rewrite call was previously wrapped in a plain span with no ``model``/``usage``,
+    so its ``REWRITE_MODEL`` cost never reached Langfuse's total; it is a
+    ``generation`` now, matching the answer call.
+
+    Rewrite (chat) and embed are separate steps: the query is embedded once, in
+    ``rewriter.embed``, and the vector is threaded into ``hybrid_search.search``
+    so the dense leg does not embed the same text again (#138). Mirrors
+    ``QueryPipeline._rewrite_and_embed``.
 
     When ``trace`` is given, each step is wrapped in a Langfuse span/generation
     (same shape as ``QueryPipeline.run``) so the trace records real per-step
@@ -315,22 +323,36 @@ def _run_question(
     shows 0.00s / $0.00 in the Langfuse UI since there's nothing to compute either
     from.
     """
-    if trace:
+    if trace and rewriter.strategy != "none":
         rewrite_span = trace.generation(name="rewrite", model=REWRITE_MODEL)
         try:
-            rewritten, _vector = rewriter.rewrite(question)
+            rewritten = rewriter.rewrite_text(question)
             rewrite_span.end(output=rewritten, usage=rewriter.last_usage)
         except Exception:
             rewrite_span.end(level="ERROR")
             raise
     else:
-        rewritten, _vector = rewriter.rewrite(question)
+        rewritten = rewriter.rewrite_text(question)
     rewrite_usage = rewriter.last_usage
+
+    if trace:
+        embed_span = trace.generation(name="embed_query", model=EMBEDDING_MODEL)
+        try:
+            query_vector = rewriter.embed(rewritten)
+            embed_span.end(usage=rewriter.last_embed_usage)
+        except Exception:
+            embed_span.end(level="ERROR")
+            raise
+    else:
+        query_vector = rewriter.embed(rewritten)
+    embed_usage = rewriter.last_embed_usage
 
     candidates = _span(
         trace,
         "hybrid_search",
-        lambda: hybrid_search.search(rewritten, None, top_k=RETRIEVAL_TOP_K),
+        lambda: hybrid_search.search(
+            rewritten, None, top_k=RETRIEVAL_TOP_K, query_vector=query_vector
+        ),
         summarize=_docnames,
     )
     top_chunks = _span(
@@ -354,7 +376,11 @@ def _run_question(
     else:
         answer, gen_usage = _generate_answer(openai_client, question, context)
 
-    return answer, retrieved_contexts, {"rewrite": rewrite_usage, "generate": gen_usage}
+    return answer, retrieved_contexts, {
+        "rewrite": rewrite_usage,
+        "embed": embed_usage,
+        "generate": gen_usage,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -435,10 +461,11 @@ def evaluate(dataset_path: Path, output_path: Path, split: str = "all") -> None:
     per_question: list[dict] = []
     refusal_results: list[dict] = []  # {question, case_class, handled}
 
-    # Pipeline-side cost accounting (#130). Every question fires a generate call
-    # and, unless QUERY_REWRITE_STRATEGY=none, a rewrite call -- refusal cases
-    # included, since they cost the same. Request count, not dollars, is the axis
-    # the daily OpenAI cap is enforced on.
+    # Pipeline-side cost accounting (#130). Every question fires a generate call,
+    # a query-embed call, and -- unless QUERY_REWRITE_STRATEGY=none -- a rewrite
+    # call; refusal cases included, since they cost the same. The query embed is
+    # ~150 tokens (~$0/query) but is counted for completeness (#138). Request
+    # count, not dollars, is the axis the daily OpenAI cap is enforced on.
     pipeline_tokens: dict[str, dict[str, int]] = {}  # model -> {input, output}
     pipeline_requests = 0
 
@@ -478,6 +505,9 @@ def evaluate(dataset_path: Path, output_path: Path, split: str = "all") -> None:
 
         if q_usage["rewrite"]:
             _add_tokens(pipeline_tokens, REWRITE_MODEL, q_usage["rewrite"])
+            pipeline_requests += 1
+        if q_usage["embed"]:
+            _add_tokens(pipeline_tokens, EMBEDDING_MODEL, q_usage["embed"])
             pipeline_requests += 1
         _add_tokens(pipeline_tokens, OPENAI_MODEL, q_usage["generate"])
         pipeline_requests += 1

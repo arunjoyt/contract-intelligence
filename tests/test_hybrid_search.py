@@ -109,6 +109,40 @@ def test_search_passes_query_vector_to_vector_store(
     assert call_args[0][0] == custom_vector
 
 
+def test_search_uses_precomputed_query_vector_and_skips_embed_query(
+    hs: HybridSearch, mock_vector_store: MagicMock, mock_embedder: MagicMock
+) -> None:
+    """#138: when the caller passes ``query_vector`` (already computed by the
+    rewriter), the dense leg uses it and does not embed the text again."""
+    precomputed = [0.7] * 1536
+
+    hs.search("payment terms", query_vector=precomputed)
+
+    mock_embedder.embed_query.assert_not_called()
+    assert mock_vector_store.search.call_args[0][0] == precomputed
+
+
+def test_search_still_embeds_when_no_query_vector_given(
+    hs: HybridSearch, mock_embedder: MagicMock
+) -> None:
+    """Backward compatible: without ``query_vector`` the text is embedded here."""
+    hs.search("payment terms")
+    mock_embedder.embed_query.assert_called_once_with("payment terms")
+
+
+def test_search_precomputed_vector_still_uses_raw_text_for_bm25(
+    hs: HybridSearch, mock_vector_store: MagicMock, mock_embedder: MagicMock
+) -> None:
+    """The BM25 leg needs the raw query string even when a dense vector is supplied."""
+    hs.build_bm25_index([DOC_A, DOC_B, DOC_C])
+
+    results = hs.search("payment terms net 30", query_vector=[0.1] * 1536)
+
+    mock_embedder.embed_query.assert_not_called()
+    # DOC_A is the only doc with "payment"/"net"/"30" tokens -> BM25 surfaces it
+    assert any(r["docname"] == "PO-001" for r in results)
+
+
 def test_search_passes_filter_conditions_to_vector_store(
     hs: HybridSearch, mock_vector_store: MagicMock
 ) -> None:
