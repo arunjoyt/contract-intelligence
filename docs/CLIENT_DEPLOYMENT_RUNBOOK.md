@@ -342,8 +342,16 @@ scoped add-on.
 > The client's questions, contract text, and scores never enter this repo's history. See
 > `evaluation/client/README.md`.
 
+> 📍 **Which collection.** Every command below scores/reads a Qdrant collection. Run them
+> against the **staging RAG stack's** collection (see [Environment strategy](#environment-strategy)),
+> or — if there is no staging stack — read-only against the prod `<client>` collection *before*
+> the frontend is opened to users. Per-client validation never rebuilds the collection (the only
+> per-client knobs are `RETRIEVAL_TOP_K` / prompt / `RERANK_TOP_N`, all query-time), so a
+> read-only pass is safe; there is **no separate eval collection to stand up**. `<coll>` below is
+> that collection name.
+
 - [ ] **Draft candidates with `scripts/generate_eval_set.py`** (this is the #127 per-client tool):
-  `QDRANT_COLLECTION=<client> python scripts/generate_eval_set.py --per-class 12 --output evaluation/client/<client>_candidates.review.json`
+  `python scripts/generate_eval_set.py --collection <coll> --per-class 12 --output evaluation/client/<client>_candidates.review.json`
   → a human-review file grounded in the client's own indexed chunks. Review every entry with the
   client expert, verify each answer against the real document, set `split`, drop the `_`-prefixed
   helper keys, and save as `evaluation/client/<client>_dataset.json`. Per-entry schema:
@@ -357,11 +365,14 @@ scoped add-on.
 - [ ] Sync the client dataset into *their own* Langfuse project so runs are browsable there:
   `LANGFUSE_PUBLIC_KEY=… LANGFUSE_SECRET_KEY=… LANGFUSE_HOST=… python evaluation/push_dataset.py --dataset evaluation/client/<client>_dataset.json`
 - [ ] Run:
-  `python evaluation/evaluate.py --dataset evaluation/client/<client>_dataset.json --output evaluation/client/<client>_results.json`
+  `python evaluation/evaluate.py --collection <coll> --dataset evaluation/client/<client>_dataset.json --output evaluation/client/<client>_results.json`
 - [ ] **Do not** compare against `evaluation/results.baseline.json` — different corpus
-- [ ] Validate against the reference thresholds and nudge at most one knob per failing slice, in
-  the reach order in `docs/PIPELINE_TUNING.md` § Per-client tuning (`RETRIEVAL_TOP_K` → prompt →
-  `RERANK_TOP_N`). A full Step A–E sweep per client is almost never warranted (#127).
+- [ ] Read the per-`case_class` scores against the reference numbers in `docs/PIPELINE_TUNING.md`
+  § Per-client tuning by eye — the LLM judge is too noisy for a hard gate (`CLAUDE.md`). When a
+  slice sits clearly low, nudge **one** knob in the reach order there
+  (`RETRIEVAL_TOP_K` → prompt → `RERANK_TOP_N`), record the `.env` override in the guided-review
+  worksheet, and re-run the failing slice. A full Step A–E sweep per client is almost never
+  warranted (#127).
 
 ---
 

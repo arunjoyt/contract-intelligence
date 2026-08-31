@@ -23,11 +23,17 @@ Usage
 -----
     python evaluation/push_dataset.py   # once, and after editing test_dataset.json
     python evaluation/evaluate.py [--dataset PATH] [--output PATH] [--split dev|test|all]
+                                 [--collection NAME]
 
 The dataset carries a dev/test ``split`` on every entry (#112). Tune knobs and
 iterate the prompt against ``--split dev``; freeze ``results.baseline.json``
 against ``--split test`` only, so methodology work never overfits the numbers it
 is judged on. ``--split all`` (the default) scores every entry.
+
+``--collection`` picks which Qdrant collection to score against (default:
+``QDRANT_COLLECTION`` env / ``VectorStore`` default). Per-client validation (#127)
+points it at the staging RAG stack's collection so the run never touches the
+client's live ``contract`` collection -- mirrors ``scripts/generate_eval_set.py``.
 """
 
 from __future__ import annotations
@@ -197,7 +203,7 @@ def _link_dataset_run(langfuse, question: str, trace, run_name: str, run_metadat
 # ---------------------------------------------------------------------------
 
 
-def _build_components():
+def _build_components(collection: str | None = None):
     from ingestion.embedder import Embedder
     from pipeline.query_rewriter import QueryRewriter
     from retrieval.hybrid_search import HybridSearch
@@ -207,7 +213,7 @@ def _build_components():
     logger.info("Initialising components …")
     embedder = Embedder()
 
-    vector_store = VectorStore()
+    vector_store = VectorStore(collection=collection) if collection else VectorStore()
     vector_store.ensure_collection()
 
     existing_texts = vector_store.get_all_texts()
@@ -418,7 +424,9 @@ def _filter_by_split(entries: list[dict], split: str) -> list[dict]:
     return kept
 
 
-def evaluate(dataset_path: Path, output_path: Path, split: str = "all") -> None:
+def evaluate(
+    dataset_path: Path, output_path: Path, split: str = "all", collection: str | None = None
+) -> None:
     from openai import OpenAI
     from ragas import EvaluationDataset
     from ragas import evaluate as ragas_evaluate
@@ -443,10 +451,10 @@ def evaluate(dataset_path: Path, output_path: Path, split: str = "all") -> None:
         logger.error("No entries match --split %s — aborting", split)
         sys.exit(1)
 
-    rewriter, hybrid_search, reranker = _build_components()
+    rewriter, hybrid_search, reranker = _build_components(collection)
     openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
-    run_config = _run_config()
+    run_config = _run_config(collection)
     langfuse = build_client()
     run_name = _run_name() if langfuse else None
     if langfuse:
@@ -737,7 +745,7 @@ def _repo_relative(path: Path) -> str:
         return path.name
 
 
-def _run_config() -> dict:
+def _run_config(collection: str | None = None) -> dict:
     """Everything that shifts the numbers but isn't the dataset or the pipeline
     code -- so a baseline is self-describing and two runs are comparable.
 
@@ -762,6 +770,7 @@ def _run_config() -> dict:
             versions[pkg] = "not installed"
 
     return {
+        "qdrant_collection": collection or os.environ.get("QDRANT_COLLECTION"),
         "rewrite_strategy": os.environ.get("QUERY_REWRITE_STRATEGY", "hyde"),
         "rewrite_model": REWRITE_MODEL,
         "retrieval_top_k": RETRIEVAL_TOP_K,
@@ -831,13 +840,22 @@ def main() -> None:
             "freeze results.baseline.json against 'test'."
         ),
     )
+    parser.add_argument(
+        "--collection",
+        default=None,
+        help=(
+            "Qdrant collection to score against (default: QDRANT_COLLECTION env / "
+            "VectorStore default). Per-client validation (#127) points this at the "
+            "staging stack's collection, never the client's live 'contract'."
+        ),
+    )
     args = parser.parse_args()
 
     if not args.dataset.exists():
         logger.error("Dataset not found: %s", args.dataset)
         sys.exit(1)
 
-    evaluate(args.dataset, args.output, args.split)
+    evaluate(args.dataset, args.output, args.split, args.collection)
 
 
 if __name__ == "__main__":
