@@ -178,6 +178,19 @@ curl https://api-contracts.client.com/health
 > port-80 block is marked `default_server` to win — verify a raw-IP request doesn't hit the stock
 > page after launch.
 
+- [ ] **Correct Langfuse's stale model prices** — run once now, before any traces accumulate:
+
+  ```bash
+  python scripts/langfuse_fix_model_prices.py   # reads LANGFUSE_* from .env
+  ```
+
+  Self-hosted Langfuse 2.x's bundled table prices `gpt-4o` at its mid-2024 launch rate
+  ($5/$15 per 1M), so every `totalCost` in the UI/API is ~1.9× high (token counts are fine).
+  The script adds a project-level price override at the current list rate ($2.50/$10 per 1M),
+  matching `evaluation/results.json`'s `costs` block and `docs/BENCHMARKS.md`. Idempotent —
+  re-run any time (e.g. after a Langfuse upgrade) with `--dry-run` to check first. See
+  [#137](https://github.com/arunjoyt/contract-intelligence/issues/137).
+
 ---
 
 ## Phase 4 — Ingest
@@ -391,6 +404,9 @@ scoped add-on.
   - `ssh -L 3000:localhost:3000 user@<ip>` → `http://localhost:3000`
     (login `admin@localhost.local` / `LANGFUSE_ADMIN_PASSWORD`)
   - `ssh -L 6333:localhost:6333 user@<ip>` → `http://localhost:6333/dashboard`
+- [ ] After any Langfuse version bump: re-run `python scripts/langfuse_fix_model_prices.py
+  --dry-run` — a newer bundled price table may make the `gpt-4o` override redundant (or need
+  a new one). See Phase 3.
 
 ### Credentials
 

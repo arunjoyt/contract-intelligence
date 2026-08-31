@@ -514,6 +514,10 @@ steps above against that host's `postgres` container. Credentials (`langfuse`/`l
 see the security issue about hardcoding these, #65) come from `docker-compose.yml`'s `POSTGRES_USER`/
 `POSTGRES_PASSWORD`, not `.env`.
 
+After any restore into a **fresh** Langfuse database, re-run
+`python scripts/langfuse_fix_model_prices.py` — the `gpt-4o` price override (#137) lives in this
+database and is dropped by `--clean`.
+
 ---
 
 ## `scripts/backup_all.sh` — running all three backups in one command
