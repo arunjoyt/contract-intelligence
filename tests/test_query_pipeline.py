@@ -64,7 +64,12 @@ def _make_pipeline(
         top_chunks = [_make_chunk("PO-001")]
 
     mock_rewriter = MagicMock()
+    mock_rewriter.strategy = "hyde"
+    mock_rewriter.rewrite_text.return_value = "hypothetical doc text"
+    mock_rewriter.embed.return_value = FAKE_VECTOR
     mock_rewriter.rewrite.return_value = ("hypothetical doc text", FAKE_VECTOR)
+    mock_rewriter.last_usage = {"input": 30, "output": 10, "total": 40}
+    mock_rewriter.last_embed_usage = {"input": 12, "total": 12}
 
     mock_search = MagicMock()
     mock_search.search.return_value = candidates
@@ -262,18 +267,34 @@ def test_run_calls_rewriter_with_question(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     pipeline = _make_pipeline()
     pipeline.run("What are the payment terms?")
-    pipeline._rewriter.rewrite.assert_called_once_with("What are the payment terms?")
+    pipeline._rewriter.rewrite_text.assert_called_once_with("What are the payment terms?")
 
 
 def test_run_passes_rewritten_text_to_hybrid_search(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     pipeline = _make_pipeline()
-    pipeline._rewriter.rewrite.return_value = ("rewritten query text", FAKE_VECTOR)
+    pipeline._rewriter.rewrite_text.return_value = "rewritten query text"
 
     pipeline.run("question")
 
     call_args = pipeline._hybrid_search.search.call_args
     assert call_args[0][0] == "rewritten query text"
+
+
+def test_run_embeds_rewritten_text_once_and_threads_vector_to_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The rewriter embeds the rewritten text exactly once; that vector is passed
+    into HybridSearch.search so the dense leg does not embed it a second time (#138)."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    pipeline = _make_pipeline()
+    pipeline._rewriter.rewrite_text.return_value = "rewritten query text"
+    pipeline._rewriter.embed.return_value = [0.42] * 1536
+
+    pipeline.run("question")
+
+    pipeline._rewriter.embed.assert_called_once_with("rewritten query text")
+    assert pipeline._hybrid_search.search.call_args[1]["query_vector"] == [0.42] * 1536
 
 
 def test_run_passes_top_k_20_to_hybrid_search(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -415,8 +436,9 @@ def test_run_records_rewrite_generation_with_usage(monkeypatch: pytest.MonkeyPat
     mock_lf.trace.return_value = mock_trace
     mock_trace.span.return_value = MagicMock()
     rewrite_span = MagicMock()
+    embed_span = MagicMock()
     generate_span = MagicMock()
-    mock_trace.generation.side_effect = [rewrite_span, generate_span]
+    mock_trace.generation.side_effect = [rewrite_span, embed_span, generate_span]
 
     pipeline = _make_pipeline(langfuse=mock_lf)
     pipeline._rewriter.last_usage = {"input": 40, "output": 12, "total": 52}
@@ -424,6 +446,51 @@ def test_run_records_rewrite_generation_with_usage(monkeypatch: pytest.MonkeyPat
     pipeline.run("question")
 
     assert rewrite_span.end.call_args[1]["usage"] == {"input": 40, "output": 12, "total": 52}
+
+
+def test_run_records_embed_query_generation_with_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The query embed is its own `generation` (EMBEDDING_MODEL), ended with the
+    rewriter's last_embed_usage -- distinct from the `rewrite` chat span (#138)."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    mock_lf = MagicMock()
+    mock_trace = MagicMock()
+    mock_lf.trace.return_value = mock_trace
+    mock_trace.span.return_value = MagicMock()
+    rewrite_span = MagicMock()
+    embed_span = MagicMock()
+    generate_span = MagicMock()
+    mock_trace.generation.side_effect = [rewrite_span, embed_span, generate_span]
+
+    pipeline = _make_pipeline(langfuse=mock_lf)
+    pipeline._rewriter.last_embed_usage = {"input": 15, "total": 15}
+
+    pipeline.run("question")
+
+    mock_trace.generation.assert_any_call(name="embed_query", model="text-embedding-3-small")
+    assert embed_span.end.call_args[1]["usage"] == {"input": 15, "total": 15}
+
+
+def test_run_strategy_none_skips_rewrite_generation_but_keeps_embed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QUERY_REWRITE_STRATEGY=none makes no LLM call, so there is no `rewrite`
+    generation -- but the query embed still runs and is still traced (#138)."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    mock_lf = MagicMock()
+    mock_trace = MagicMock()
+    mock_lf.trace.return_value = mock_trace
+    mock_trace.span.return_value = MagicMock()
+    mock_trace.generation.return_value = MagicMock()
+
+    pipeline = _make_pipeline(langfuse=mock_lf)
+    pipeline._rewriter.strategy = "none"
+
+    pipeline.run("question")
+
+    gen_names = [c.kwargs.get("name") for c in mock_trace.generation.call_args_list]
+    assert "rewrite" not in gen_names
+    assert "embed_query" in gen_names
+    assert "generate" in gen_names
 
 
 def test_run_with_langfuse_generation_passes_usage(monkeypatch: pytest.MonkeyPatch) -> None:

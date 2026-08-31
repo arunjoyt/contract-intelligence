@@ -56,6 +56,7 @@ class HybridSearch:
         query: str,
         filter_conditions: dict[str, Any] | None = None,
         top_k: int = 20,
+        query_vector: list[float] | None = None,
     ) -> list[dict]:
         """Hybrid search: BM25 + Qdrant vector search fused via RRF.
 
@@ -63,8 +64,15 @@ class HybridSearch:
         When ``filter_conditions`` is given, both legs honour it — Qdrant filters
         during ANN traversal, the BM25 leg is filtered in Python (#98) — so the
         filter is a hard constraint on the fused result, not a soft bias.
+
+        ``query_vector``, if given, is used for the dense leg instead of embedding
+        ``query`` here -- the query path already embeds the rewritten text in
+        ``QueryRewriter.embed`` and passes it through, avoiding a duplicate
+        ``text-embedding-3-small`` round-trip (#138). The BM25 leg always uses the
+        raw ``query`` text. When omitted, ``query`` is embedded here as before.
         """
-        query_vector = self._embedder.embed_query(query)
+        if query_vector is None:
+            query_vector = self._embedder.embed_query(query)
         qdrant_results = self._vector_store.search(query_vector, filter_conditions, top_k=top_k)
 
         rrf_scores: dict[str, float] = {}

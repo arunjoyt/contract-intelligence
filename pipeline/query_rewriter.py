@@ -49,29 +49,54 @@ class QueryRewriter:
         self._embedder = embedder
         self._strategy = strategy or os.environ.get("QUERY_REWRITE_STRATEGY", "hyde")
         self._client = OpenAI(api_key=api_key or os.environ["OPENAI_API_KEY"])
-        # Token usage of the most recent rewrite() chat call, in the same shape as
-        # QueryPipeline._generate's usage dict. None when no call was made. Callers
-        # read it right after rewrite() to record the rewrite step as a Langfuse
-        # `generation` with real cost (#130) -- the rewrite call was otherwise
-        # invisible in per-query cost.
+        # Token usage of the most recent rewrite_text() chat call, in the same
+        # shape as QueryPipeline._generate's usage dict. None when no call was
+        # made. Callers read it right after rewrite_text() to record the rewrite
+        # step as a Langfuse `generation` with real cost (#130) -- the rewrite
+        # call was otherwise invisible in per-query cost.
         self.last_usage: dict[str, int] | None = None
+        # Token usage of the most recent embed() call, as ``{"input", "total"}``.
+        # Read right after embed() to record the query embedding as its own
+        # `generation` (#138).
+        self.last_embed_usage: dict[str, int] | None = None
 
-    def rewrite(self, query: str) -> tuple[str, list[float]]:
-        """Rewrite the query and return (rewritten_text, embedding_vector).
+    @property
+    def strategy(self) -> str:
+        return self._strategy
 
-        The embedding is of the rewritten text; callers use it for vector search.
-        Falls back to the original query if GPT-4o returns an empty response.
+    def rewrite_text(self, query: str) -> str:
+        """Chat-only rewrite -- no embedding. Returns the rewritten text (or the
+        original query for the ``none`` strategy / on an empty LLM response).
         Sets ``self.last_usage`` to this call's token usage (None if no LLM call).
+
+        The embedding is a separate step (``embed``) so the pipeline can trace it
+        as its own Langfuse observation rather than bundling it into the rewrite
+        `generation` span (#138).
         """
         if self._strategy == "none":
-            rewritten, self.last_usage = query, None
-        elif self._strategy == "step_back":
+            self.last_usage = None
+            return query
+        if self._strategy == "step_back":
             rewritten, self.last_usage = self._step_back(query)
         else:
             rewritten, self.last_usage = self._hyde(query)
+        return rewritten
 
-        vector = self._embedder.embed_query(rewritten)
-        return rewritten, vector
+    def embed(self, text: str) -> list[float]:
+        """Embed text for dense retrieval. Sets ``self.last_embed_usage`` to this
+        call's token usage (#138)."""
+        vector, self.last_embed_usage = self._embedder.embed_query_with_usage(text)
+        return vector
+
+    def rewrite(self, query: str) -> tuple[str, list[float]]:
+        """Convenience wrapper: ``rewrite_text`` then ``embed`` in one call.
+
+        Returns ``(rewritten_text, embedding_vector)``. Kept for callers that
+        want both in one step (integration tests); ``QueryPipeline`` calls the
+        two halves separately so it can trace them independently.
+        """
+        rewritten = self.rewrite_text(query)
+        return rewritten, self.embed(rewritten)
 
     def _hyde(self, query: str) -> tuple[str, dict[str, int]]:
         response = self._client.chat.completions.create(

@@ -148,10 +148,12 @@ ERPNext --REST API (full ingest) / Webhooks (incremental)--> Ingestion --> Qdran
   (`cross-encoder/ms-marco-MiniLM-L-6-v2`, lazy singleton, loaded once at startup).
 - **Pipeline** (`pipeline/`): `query_rewriter.py` (HyDE or step-back rewriting, controlled by
   `QUERY_REWRITE_STRATEGY`, on `REWRITE_MODEL` / default `gpt-4o-mini`) → `query_pipeline.py`
-  (orchestrates rewrite → metadata filter extraction → hybrid search top-20 → rerank top-5 →
-  `OPENAI_MODEL` generation, default `gpt-4o`, with required source citations). Every step is a
-  Langfuse child observation — `rewrite` and `generate` are `generation`s (token cost tracked),
-  the rest plain spans. `OPENAI_MODEL`/`REWRITE_MODEL`/`EMBEDDING_MODEL` are centralized in
+  (orchestrates rewrite → embed the rewritten text once → metadata filter extraction → hybrid
+  search top-20 → rerank top-5 → `OPENAI_MODEL` generation, default `gpt-4o`, with required source
+  citations). The query is embedded once (in the rewriter) and the vector is passed into hybrid
+  search, so the dense leg does not re-embed it (#138). Every step is a Langfuse child observation —
+  `rewrite`, `embed_query` and `generate` are `generation`s (token cost tracked; `rewrite` is
+  omitted for `QUERY_REWRITE_STRATEGY=none`), the rest plain spans. `OPENAI_MODEL`/`REWRITE_MODEL`/`EMBEDDING_MODEL` are centralized in
   `config.py` (see `docs/ARCHITECTURE.md` § Model Configuration).
 - **API** (`api/main.py`): `POST /query`, `POST /webhook/erpnext`, `POST /ingest/full` (background task,
   `X-Admin-Secret`-gated), `GET /health`. Startup hook ensures the Qdrant collection exists, rebuilds the
@@ -185,15 +187,17 @@ so ingestion embedding cost is tracked (see `docs/ARCHITECTURE.md` § Observabil
 
 ### Query pipeline order
 
-1. `QueryRewriter.rewrite()` — HyDE (default) embeds a hypothetical answer document instead of the raw
-   query, improving recall for abstract questions; step-back rewrites the question at a higher abstraction
-   level instead. The chat call runs on `REWRITE_MODEL` (default `gpt-4o-mini`), not `OPENAI_MODEL`.
-2. Metadata filter extraction (pure keyword heuristic — doctype/status only, no LLM call, no date-range
+1. `QueryRewriter.rewrite_text()` — HyDE (default) writes a hypothetical answer document instead of the
+   raw query, improving recall for abstract questions; step-back rewrites the question at a higher
+   abstraction level instead. Chat-only, on `REWRITE_MODEL` (default `gpt-4o-mini`), not `OPENAI_MODEL`.
+2. `QueryRewriter.embed()` — embeds the rewritten text once. The vector is threaded into
+   `HybridSearch.search(query_vector=...)` so the dense leg does not embed the same string again (#138).
+3. Metadata filter extraction (pure keyword heuristic — doctype/status only, no LLM call, no date-range
    parsing) from the original question. The keyword vocabulary lives in `pipeline/constants.py`
    (`METADATA_FILTER_DOCTYPE_KEYWORDS` / `METADATA_FILTER_STATUS_KEYWORDS`), env-overridable per client.
-3. `HybridSearch.search()` — BM25 + Qdrant vector search in parallel, fused via RRF, top-20.
-4. `Reranker.rerank()` — cross-encoder scores all 20 `(query, chunk)` pairs, returns top-5.
-5. GPT-4o generation with a system prompt that requires `[docname]`-style citations per claim and forbids
+4. `HybridSearch.search()` — BM25 + Qdrant vector search in parallel, fused via RRF, top-20.
+5. `Reranker.rerank()` — cross-encoder scores all 20 `(query, chunk)` pairs, returns top-5.
+6. GPT-4o generation with a system prompt that requires `[docname]`-style citations per claim and forbids
    answering outside the provided context.
 
 ### Security invariants
