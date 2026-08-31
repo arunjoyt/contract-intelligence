@@ -6,10 +6,11 @@ nothing. It re-derives the numbers in ``docs/BENCHMARKS.md`` from whatever trace
 are currently in Langfuse, so the doc stays reproducible: run an eval pass with
 ``LANGFUSE_*`` set (``python evaluation/evaluate.py --split test``), then run this.
 
-Cost is reported twice: as Langfuse computes it (its bundled model-price table),
-and recomputed from token counts at the rates in ``evaluation/evaluate.py``'s
-``_PRICE_PER_1M_TOKENS`` — self-hosted Langfuse 2.x still prices gpt-4o at its
-mid-2024 launch rate, roughly 1.9x the current list price (see BENCHMARKS.md).
+Cost is reported twice: as Langfuse computes it (its model-price table), and
+recomputed from token counts at the rates in ``evaluation/evaluate.py``'s
+``_PRICE_PER_1M_TOKENS``. These agree once ``scripts/langfuse_fix_model_prices.py``
+has run against the project; without it, self-hosted Langfuse 2.x prices gpt-4o at
+its stale mid-2024 launch rate, ~1.9x the current list price (#137, BENCHMARKS.md).
 
 Usage:
     python scripts/benchmark_from_langfuse.py [--query-run-size 53]

@@ -26,7 +26,7 @@ python scripts/benchmark_from_langfuse.py       # query + ingest, read-only from
 | **Corpus** | 61 chunks — 33 Contracts (52 chunks) + 9 Terms and Conditions (9 chunks). `text-embedding-3-small`, 1536-dim, cosine. |
 | **Warm vs cold** | Query numbers are **warm** — reranker loaded, BM25 index built. Cold start is measured separately in § [Cold start](#cold-start). |
 | **Concurrency** | None. One sequential caller. Every p95 here is single-request variance, not contention. |
-| **Cost rates** | Recomputed from token counts at current OpenAI list prices (the table in `evaluation/evaluate.py`, `_PRICE_PER_1M_TOKENS`). Langfuse's own `totalCost` is shown alongside and is ~1.9× higher — see § [Cost](#cost). |
+| **Cost rates** | Recomputed from token counts at current OpenAI list prices (the table in `evaluation/evaluate.py`, `_PRICE_PER_1M_TOKENS`). Langfuse's own `totalCost` on these traces is ~1.9× higher — the project's `gpt-4o` price was still the stale launch rate when this ran (#137, since fixed by `scripts/langfuse_fix_model_prices.py`); see § [Cost](#cost). |
 
 ---
 
@@ -101,12 +101,14 @@ prices**. Where Langfuse's own `totalCost` differs, both are shown.
 | query embedding | `text-embedding-3-small` | ~150 | <$0.00001 (negligible) |
 | **Total** | | | **≈ $0.0042 / query** |
 
-> **Langfuse shows ~$0.0078/query** for the same traces — nearly 2× — because
-> self-hosted Langfuse 2.x still prices `gpt-4o` at its mid-2024 launch rate
-> ($5 / $15 per 1M in/out) rather than the current $2.50 / $10. The token counts
-> are correct; only Langfuse's price table is stale (**#137**). Fix by overriding
-> the model price in the Langfuse project, or read cost from `results.json`'s
-> `costs` block (#130), which uses the current rates.
+> **These numbers were measured against a Langfuse project whose `gpt-4o` price
+> was the stale mid-2024 launch rate** ($5 / $15 per 1M in/out vs. the current
+> $2.50 / $10), so the raw traces read ~$0.0078/query — nearly 2×. Token counts
+> were always correct; only Langfuse's bundled price table was stale (**#137**).
+> Fixed by `scripts/langfuse_fix_model_prices.py`, which adds a project-level
+> price override at the current rate — run per deployment (Phase 3 of
+> `docs/CLIENT_DEPLOYMENT_RUNBOOK.md`). `results.json`'s `costs` block (#130)
+> prices independently at current rates and was never affected.
 
 ### Per full ingest
 
@@ -155,7 +157,7 @@ These numbers are from 61 chunks and one caller. What moves first as either grow
 
 - `docs/ARCHITECTURE.md` § Observability — the span/generation shapes these numbers come from
 - #130 — per-run cost capture in `results.json` (`costs` block, `request_count`)
-- #137 — Langfuse self-hosted `gpt-4o` price is the stale 2024 launch rate
+- #137 — Langfuse self-hosted `gpt-4o` stale price, fixed by `scripts/langfuse_fix_model_prices.py`
 - #97 — BM25 → Qdrant sparse vectors (the scale bottleneck above)
 - #101 — local embedding model (would remove the embed round-trip from ingest and query)
 - #50 — quality monitoring (the other axis: is the answer good, not how fast/cheap)
