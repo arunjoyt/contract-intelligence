@@ -16,8 +16,10 @@ by per-client validation instead. See
 > noise band on this corpus — `hyde` and `RERANK_TOP_N=5` stay as shipped. The
 > binding constraint is judge variance, not tuning effort. See the **Outcome**
 > callouts under Steps A and C; runs archived in `evaluation/tuning/`
-> (gitignored). Generation-model swap (`gpt-4o` → `gpt-4o-mini`) is split out to
-> **#132**.
+> (gitignored). Generation-model swap (`gpt-4o` → `gpt-4o-mini`) was split out to
+> **#132** and then **deferred (closed not-planned)** — same corpus/judge-noise
+> ceiling; `gpt-4o` stays the default and a cheaper generation tier is validated
+> per client during onboarding (#127/#135), not benchmarked on the demo corpus.
 
 This doc walks the whole pipeline order: ingest → embed → rewrite → retrieve →
 rerank → generate. It describes the **one-time** tuning pass on the reference
@@ -279,6 +281,14 @@ the common case.
   refusing is a regression even if the headline moves up.
 - Either change means refreshing `evaluation/results.baseline.json` **in the same
   PR** (per `CLAUDE.md` § CI).
+
+> **Outcome (2026-08-31).** The model swap (`gpt-4o` → `gpt-4o-mini`) was filed
+> as **#132** and **closed not-planned** without a demo-corpus run: the judge
+> can't separate close generation configs here, and citation/faithfulness
+> tolerance for a cheaper model is a per-client call. `gpt-4o` stays the default;
+> `OPENAI_MODEL=gpt-4o-mini` is validated against a client's real questions
+> during the Phase 5 guided review (#135) if they want the cheaper tier — no
+> code change (env-read already). Prompt tuning was not attempted.
 
 ## Step E — expect the answer to not be a single number
 
