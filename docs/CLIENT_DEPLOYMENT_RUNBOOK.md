@@ -309,6 +309,11 @@ docker compose exec app python3 -c \
 - [ ] Direct TCP to `<ip>:6333` → connection refused
 - [ ] Edit a contract in ERPNext → confirm re-index in `app` logs / rising point count
 - [ ] Set `JWT_EXPIRY_HOURS=0` temporarily → next request bounces to login → revert
+- [ ] **Full-pipeline smoke + latency baseline** — `python evaluation/evaluate.py --split test
+  --no-judge --collection <coll>` runs every reference question end-to-end (no RAGAS judge, so
+  ~$0.10 and ~2 min), confirms none error, and writes real per-stage latency to Langfuse. Then
+  `python scripts/benchmark_from_langfuse.py` for this box's own latency/cost table. Do this again
+  after any infra move.
 
 ### Guided review with the client expert
 

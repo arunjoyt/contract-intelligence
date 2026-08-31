@@ -23,7 +23,7 @@ Usage
 -----
     python evaluation/push_dataset.py   # once, and after editing test_dataset.json
     python evaluation/evaluate.py [--dataset PATH] [--output PATH] [--split dev|test|all]
-                                 [--collection NAME]
+                                 [--collection NAME] [--no-judge]
 
 The dataset carries a dev/test ``split`` on every entry (#112). Tune knobs and
 iterate the prompt against ``--split dev``; freeze ``results.baseline.json``
@@ -34,6 +34,14 @@ is judged on. ``--split all`` (the default) scores every entry.
 ``QDRANT_COLLECTION`` env / ``VectorStore`` default). Per-client validation (#127)
 points it at the staging RAG stack's collection so the run never touches the
 client's live ``contract`` collection -- mirrors ``scripts/generate_eval_set.py``.
+
+``--no-judge`` runs the pipeline over every question and writes the answers,
+retrieved contexts, per-stage Langfuse traces and pipeline cost -- but skips the
+RAGAS judge entirely. The judge is ~40% of the dollar cost and ~80% of the wall
+time, and its scores are a function of the pipeline + corpus + models, not the
+host -- so for a deployment smoke test or a latency reading (e.g. after moving
+the stack to new infra) it is pure overhead. ``metrics`` comes back empty (bar
+``refusal_handled``, which is a plain string check, not the judge).
 """
 
 from __future__ import annotations
@@ -425,7 +433,11 @@ def _filter_by_split(entries: list[dict], split: str) -> list[dict]:
 
 
 def evaluate(
-    dataset_path: Path, output_path: Path, split: str = "all", collection: str | None = None
+    dataset_path: Path,
+    output_path: Path,
+    split: str = "all",
+    collection: str | None = None,
+    no_judge: bool = False,
 ) -> None:
     from openai import OpenAI
     from ragas import EvaluationDataset
@@ -454,7 +466,7 @@ def evaluate(
     rewriter, hybrid_search, reranker = _build_components(collection)
     openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
-    run_config = _run_config(collection)
+    run_config = _run_config(collection, no_judge=no_judge)
     langfuse = build_client()
     run_name = _run_name() if langfuse else None
     if langfuse:
@@ -581,7 +593,13 @@ def evaluate(
     num_headline = 0
     judge_usage: dict[str, Any] = {"captured": False}
 
-    if samples:
+    if samples and no_judge:
+        logger.info(
+            "--no-judge: %d questions answered, RAGAS judge skipped (metrics empty)",
+            len(samples),
+        )
+
+    if samples and not no_judge:
         logger.info("Running RAGAS on %d samples …", len(samples))
         from ragas.cost import get_token_usage_for_openai
         from ragas.embeddings import embedding_factory
@@ -680,7 +698,9 @@ def evaluate(
         "config": run_config,
         "num_questions": len(entries),
         "num_headline": num_headline,
-        "num_scored": len(samples),
+        "judged": not no_judge,
+        "num_scored": 0 if no_judge else len(samples),
+        "num_answered": len(samples),
         "num_refusal_cases": len(refusal_results),
         "num_expected_fail": sum(m["expected_fail"] for m in sample_meta),
         "metrics": metrics,
@@ -745,7 +765,7 @@ def _repo_relative(path: Path) -> str:
         return path.name
 
 
-def _run_config(collection: str | None = None) -> dict:
+def _run_config(collection: str | None = None, *, no_judge: bool = False) -> dict:
     """Everything that shifts the numbers but isn't the dataset or the pipeline
     code -- so a baseline is self-describing and two runs are comparable.
 
@@ -777,8 +797,9 @@ def _run_config(collection: str | None = None) -> dict:
         "rerank_top_n": RERANK_TOP_N,
         "generation_model": OPENAI_MODEL,
         "generation_max_tokens": GENERATION_MAX_TOKENS,
-        "ragas_judge_model": _RAGAS_JUDGE_MODEL,
-        "ragas_judge_embedding_model": _RAGAS_JUDGE_EMBEDDING_MODEL,
+        "ragas_judge_model": None if no_judge else _RAGAS_JUDGE_MODEL,
+        "ragas_judge_embedding_model": None if no_judge else _RAGAS_JUDGE_EMBEDDING_MODEL,
+        "judge": not no_judge,
         "embedding_model": EMBEDDING_MODEL,
         "chunk_size": CHUNK_SIZE,
         "chunk_overlap": CHUNK_OVERLAP,
@@ -849,13 +870,23 @@ def main() -> None:
             "staging stack's collection, never the client's live 'contract'."
         ),
     )
+    parser.add_argument(
+        "--no-judge",
+        action="store_true",
+        help=(
+            "Run the pipeline over every question (answers + latency traces + "
+            "pipeline cost) but skip the RAGAS judge. ~40%% cheaper, ~5x faster; "
+            "'metrics' comes back empty. Use for a deployment smoke test or a "
+            "latency reading -- the judge's scores don't depend on the host."
+        ),
+    )
     args = parser.parse_args()
 
     if not args.dataset.exists():
         logger.error("Dataset not found: %s", args.dataset)
         sys.exit(1)
 
-    evaluate(args.dataset, args.output, args.split, args.collection)
+    evaluate(args.dataset, args.output, args.split, args.collection, args.no_judge)
 
 
 if __name__ == "__main__":

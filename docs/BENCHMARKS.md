@@ -9,8 +9,15 @@ measured and *what would change under real load* (§ [At scale](#what-changes-at
 Regenerate every number below with:
 
 ```bash
-python scripts/benchmark_from_langfuse.py       # query + ingest, read-only from the Langfuse trace DB
+# 1. produce a fresh run of query traces (no RAGAS judge -- latency/cost only, ~5x faster, ~40% cheaper)
+python evaluation/evaluate.py --split test --no-judge
+# 2. aggregate them
+python scripts/benchmark_from_langfuse.py        # query + ingest, read-only from the Langfuse trace DB
 ```
+
+Step 1 is also the right smoke test after moving the stack to new infrastructure —
+it exercises every question end-to-end and records real per-stage latency on the
+new host without paying for the judge (whose scores don't depend on the host).
 
 ---
 
