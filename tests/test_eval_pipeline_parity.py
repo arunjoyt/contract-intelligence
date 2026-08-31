@@ -96,6 +96,29 @@ def test_main_threads_collection_flag_to_evaluate(monkeypatch: pytest.MonkeyPatc
         ["evaluate.py", "--split", "dev", "--collection", "acme_staging"],
     )
     ev.main()
-    # evaluate(dataset_path, output_path, split, collection)
+    # evaluate(dataset_path, output_path, split, collection, no_judge)
     assert captured["args"][2] == "dev"
     assert captured["args"][3] == "acme_staging"
+    assert captured["args"][4] is False
+
+
+# --- --no-judge flag (deployment smoke test / latency run) -------------------
+
+
+def test_run_config_records_no_judge() -> None:
+    """A --no-judge run is self-describing: judge=False, judge model nulled."""
+    assert ev._run_config()["judge"] is True
+    assert ev._run_config()["ragas_judge_model"] is not None
+
+    cfg = ev._run_config(no_judge=True)
+    assert cfg["judge"] is False
+    assert cfg["ragas_judge_model"] is None
+    assert cfg["ragas_judge_embedding_model"] is None
+
+
+def test_main_threads_no_judge_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = {}
+    monkeypatch.setattr(ev, "evaluate", lambda *a, **k: captured.update(args=a))
+    monkeypatch.setattr("sys.argv", ["evaluate.py", "--split", "dev", "--no-judge"])
+    ev.main()
+    assert captured["args"][4] is True
