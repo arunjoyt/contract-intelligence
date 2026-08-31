@@ -26,8 +26,8 @@ Usage
     # just the two slices you want to deepen, 15 each
     python scripts/generate_eval_set.py --case-class refusal --case-class temporal --per-class 15
 
-    # per-client (#127): the client's collection, output under the gitignored client dir
-    QDRANT_COLLECTION=acme python scripts/generate_eval_set.py \
+    # per-client (#127): the staging stack's collection, output under the gitignored client dir
+    python scripts/generate_eval_set.py --collection acme_staging \
         --output evaluation/client/acme_candidates.review.json
 
 Per #118, a real client's questions and contract text must never be committed to this

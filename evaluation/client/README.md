@@ -11,9 +11,9 @@ the deployer's machine.
 | File | Produced by | Notes |
 |---|---|---|
 | `<client>_guided_review.md` | filled-in copy of `docs/templates/guided_review.md`, live with the client expert | **the default Phase 5 acceptance artifact** — names real documents, so it lives here not in the repo |
-| `<client>_candidates.review.json` | `scripts/generate_eval_set.py --output evaluation/client/<client>_candidates.review.json` | LLM draft over the client's live collection; a human-review file, not a dataset |
+| `<client>_candidates.review.json` | `scripts/generate_eval_set.py --collection <coll> --output evaluation/client/<client>_candidates.review.json` | LLM draft over the staging stack's collection; a human-review file, not a dataset |
 | `<client>_dataset.json` | hand-review of the candidates with the client expert | the client's golden set — same schema as `../test_dataset.json` |
-| `<client>_results.json` | `evaluate.py --dataset evaluation/client/<client>_dataset.json --output evaluation/client/<client>_results.json` | the client's eval run |
+| `<client>_results.json` | `evaluate.py --collection <coll> --dataset evaluation/client/<client>_dataset.json --output evaluation/client/<client>_results.json` | the client's eval run — `<coll>` is the staging stack's collection, never a separate eval collection (#127) |
 
 The `.json` rows above are the **optional** RAGAS-benchmark add-on; the guided
 review is the default.

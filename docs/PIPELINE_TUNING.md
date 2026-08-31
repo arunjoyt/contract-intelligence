@@ -263,6 +263,15 @@ lighter validation pass (#127) — a small generated + spot-checked eval set on 
 client's corpus, checked against the reference thresholds, with a targeted
 single-knob nudge only when a `case_class` slice fails.
 
+**Where it runs.** On the **staging RAG stack**'s collection
+(`docs/CLIENT_DEPLOYMENT_RUNBOOK.md` § Environment strategy), or read-only against
+the prod `<client>` collection before the frontend is opened. `evaluate.py
+--collection <name>` and `generate_eval_set.py --collection <name>` both target it
+explicitly. There is **no separate `<client>_eval` collection** — every per-client
+knob below is query-time, so nothing here rebuilds the collection and a read-only
+pass cannot disrupt the client's users. (An earlier draft of #127 proposed a
+dedicated eval collection; the staging-stack strategy supersedes it.)
+
 ### Which knobs are corpus-dependent
 
 | Knob | Per client? | Why |
