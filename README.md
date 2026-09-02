@@ -19,6 +19,21 @@ architecture:
 
 ## Architecture
 
+At a glance:
+
+```mermaid
+flowchart LR
+    ERP[ERPNext] -- "REST + webhooks" --> ING[Ingest<br/>parse → chunk → embed]
+    ING --> QD[(Vector Store - <br/>Qdrant)]
+    User[User] --> UI[Streamlit] --> API[[FastAPI]]
+    API --> PIPE[Query pipeline<br/>rewrite → retrieve → rerank → generate]
+    PIPE --> QD
+    PIPE -- "answer + citations" --> API --> UI
+    ING & PIPE -. trace .-> LF{{Observability - <br/>Langfuse}}
+```
+
+And in detail:
+
 ```mermaid
 flowchart LR
     ERP[ERPNext]
