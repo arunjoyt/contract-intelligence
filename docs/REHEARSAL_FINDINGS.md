@@ -114,3 +114,29 @@ set `ALLOWED_ROLES` on the box to a role the working test user lacks
 (`ALLOWED_ROLES=Accounts Manager`), log in as that user, confirm
 `{"detail":"Access denied — insufficient ERPNext roles"}` (403), revert `.env`, restart
 `app`. Runbook Phase 5 should document this substitute as the default.
+
+### docs/BENCHMARKS.md numbers are M1-laptop and partly stale (2026-09-04)
+
+The committed latency/cost tables were measured on an M1 laptop at an older build.
+The Phase 5 t3.large run diverges enough that the doc misleads a real deployment:
+
+| stage (p50) | BENCHMARKS.md (M1) | t3.large (this run) |
+|---|---|---|
+| `rewrite` | 0.156 s | 1.46 s |
+| `hybrid_search` | 0.166 s | 0.011 s |
+| `rerank` | 0.150 s | 1.15 s |
+| `generate` | 1.007 s | 0.94 s |
+| end-to-end | 1.487 s | **3.88 s** (p95 5.48 s) |
+| cost/query | $0.0042 | ~$0.0026 |
+| full ingest | ~10 s / 61 ch | 17.7 s / 59 ch |
+| webhook re-index | ~0.6 s | 1.66 s |
+
+- The doc's `rewrite` p50 (0.156 s) is not credible for a gpt-4o-mini HyDE call and
+  predates the #138 embed split — it should be re-measured regardless of instance.
+- `rerank` and `rewrite` are the real t3.large gap (cross-encoder on 2 vCPU, no fast
+  Apple PyTorch path); `hybrid_search` is *faster* now (#138 removed the duplicate
+  dense-leg embed).
+- Fix: refresh `docs/BENCHMARKS.md` with the t3.large figures (from
+  `~/eval-results-139/benchmark.txt` on the box) on a branch, and mark the methodology
+  row with the instance type. Do NOT touch `evaluation/results.baseline.json` — this
+  was a `--no-judge` run.
