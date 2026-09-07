@@ -62,18 +62,19 @@ solvable with additional scope, but none are in the base build.
 
 ## Performance & cost envelope
 
-Measured on the reference corpus (~60 contract chunks), single user, one laptop-class machine.
-Full method and caveats in [`BENCHMARKS.md`](BENCHMARKS.md).
+Measured on the reference corpus (~60 contract chunks), single user, on the production
+server class (AWS EC2 `t3.large` — 2 vCPU, 8 GB). Full method and caveats in
+[`BENCHMARKS.md`](BENCHMARKS.md).
 
 | | Value | Notes |
 |---|---|---|
-| **Answer latency** | ~1.5 s median, ~2.6 s 95th percentile | ~70% of that is the OpenAI generation call; local search is ~0.5 s and flat |
-| **Cost per question** | **~$0.004** | Independent of how many contracts you have — the model always sees a fixed 5-passage context. Scales with answer length, not corpus size. |
-| **Monthly cost, 200 questions/day** | ~$25 OpenAI + ~$60 server ≈ **$85/mo** | |
-| **Monthly cost, 1,000 questions/day** | ~$126 OpenAI + ~$60 server ≈ **$186/mo** | |
-| **Full re-index of the corpus** | ~10 s for ~40 documents; **$0.00006** | One-time and on demand |
-| **Incremental re-index (one edited contract)** | ~0.6 s | Automatic, on every ERPNext save |
-| **Cold start after a reboot** | ~8 s to ready | |
+| **Answer latency** | ~3.9 s median, ~5.5 s 95th percentile | Split roughly: query rewrite ~1.5 s, re-ranking ~1.2 s, generation ~0.9 s. Local vector/keyword search is ~0.01 s. Faster CPU or a GPU cuts the re-ranking term. |
+| **Cost per question** | **~$0.0026** | Independent of how many contracts you have — the model always sees a fixed 5-passage context. Scales with answer length, not corpus size. |
+| **Monthly cost, 200 questions/day** | ~$16 OpenAI + ~$60 server ≈ **$75/mo** | |
+| **Monthly cost, 1,000 questions/day** | ~$78 OpenAI + ~$60 server ≈ **$140/mo** | |
+| **Full re-index of the corpus** | ~18 s for ~40 documents; **$0.00006** | One-time and on demand |
+| **Incremental re-index (one edited contract)** | ~1.7 s | Automatic, on every ERPNext save |
+| **Cold start after a reboot** | ~15 s to ready | Mostly the ML library import, not the pipeline warm-up |
 
 **What is not yet measured:** behaviour under concurrent users. The re-ranking step processes
 one request at a time, so simultaneous questions queue rather than run in parallel — the latency

@@ -2,9 +2,15 @@
 
 Reproducible performance and cost baseline for the query and ingest paths. **The
 method matters more than the absolute numbers here:** this is a single-user demo
-over a ~60-chunk corpus on a laptop — too small for retrieval latency to be
-interesting and with no concurrency. What transfers is *how* each number was
-measured and *what would change under real load* (§ [At scale](#what-changes-at-scale)).
+over a ~60-chunk corpus with no concurrency — too small for retrieval latency to
+be interesting. What transfers is *how* each number was measured and *what would
+change under real load* (§ [At scale](#what-changes-at-scale)).
+
+The figures below were taken on the actual production box (AWS EC2 `t3.large`)
+during the #139 EC2 migration rehearsal, not on a laptop — so the network path to
+OpenAI and the 2-vCPU CPU inference are the real deployment's, not an M1's. An
+earlier revision of this doc measured the same pipeline on an Apple M1; where the
+gap is instructive it is called out inline.
 
 Regenerate every number below with:
 
@@ -18,6 +24,8 @@ python scripts/benchmark_from_langfuse.py        # query + ingest, read-only fro
 Step 1 is also the right smoke test after moving the stack to new infrastructure —
 it exercises every question end-to-end and records real per-stage latency on the
 new host without paying for the judge (whose scores don't depend on the host).
+On a *fresh* deployment step 2 needs `.env` reachable inside the `app` container
+and the golden-set dataset is not required — see **#146**.
 
 ---
 
@@ -25,146 +33,166 @@ new host without paying for the judge (whose scores don't depend on the host).
 
 | | |
 |---|---|
-| **Source** | Langfuse trace DB (self-hosted, `docker compose`). Every pipeline step is a span/generation with real wall-clock latency; `generate` and (since #134) `rewrite` are `generation`s with token usage. No numbers are hand-timed. |
-| **Query-path sample** | 53 `eval_question` traces — one `python evaluation/evaluate.py --split test` pass. Same span shape as the production `query` pipeline **minus `filter_extraction`** (the eval harness passes filters explicitly; see the note in the query table). |
-| **Ingest-path sample** | `full_ingest` traces from `POST /ingest/full` over the demo corpus. |
-| **Build under test** | ~`284b891` (2026-08-29). `REWRITE_MODEL=gpt-4o-mini` (#128) in effect; `rewrite`-as-`generation` (#134) **not** yet — so the sampled traces carry no rewrite token cost, added analytically in § [Cost](#cost). |
-| **Hardware** | Apple M1, 8 GB RAM, macOS 26.5. All services (Qdrant, Langfuse + Postgres, reranker) on the one machine. |
-| **Corpus** | 61 chunks — 33 Contracts (52 chunks) + 9 Terms and Conditions (9 chunks). `text-embedding-3-small`, 1536-dim, cosine. |
+| **Source** | Langfuse trace DB (self-hosted, `docker compose`). Every pipeline step is a span/generation with real wall-clock latency; `rewrite`, `embed_query` and `generate` are `generation`s with token usage. No numbers are hand-timed. |
+| **Query-path sample** | 53 `eval_question` traces — one `python evaluation/evaluate.py --split test --no-judge` pass. Same span shape as the production `query` pipeline **minus `filter_extraction`** (the eval harness passes filters explicitly; see the note in the query table). |
+| **Ingest-path sample** | `full_ingest` traces from `POST /ingest/full` over the demo corpus, plus `webhook_reindex` traces from two single-document webhook edits. |
+| **Build under test** | `5cda5d5` (2026-08-31). Includes `REWRITE_MODEL=gpt-4o-mini` (#128), `rewrite`-as-`generation` (#134 — the sampled traces carry real rewrite token cost) and the #138 query-embed split (the dense retrieval leg no longer re-embeds; `embed_query` is its own span). |
+| **Hardware** | AWS EC2 `t3.large` — 2 vCPU (burstable), 8 GB RAM, Ubuntu 22.04. All services (Qdrant, Langfuse + Postgres, reranker, nginx) co-resident on the one box (Option B topology, `docs/DEPLOYMENT.md`). Cross-encoder inference is CPU-only — no MPS/CUDA. |
+| **Corpus** | 59 chunks — 40 documents (31 Contracts + 9 Terms and Conditions; Contract PDF attachments index under the parent). `text-embedding-3-small`, 1536-dim, cosine. |
 | **Warm vs cold** | Query numbers are **warm** — reranker loaded, BM25 index built. Cold start is measured separately in § [Cold start](#cold-start). |
 | **Concurrency** | None. One sequential caller. Every p95 here is single-request variance, not contention. |
-| **Cost rates** | Recomputed from token counts at current OpenAI list prices (the table in `evaluation/evaluate.py`, `_PRICE_PER_1M_TOKENS`). Langfuse's own `totalCost` on these traces is ~1.9× higher — the project's `gpt-4o` price was still the stale launch rate when this ran (#137, since fixed by `scripts/langfuse_fix_model_prices.py`); see § [Cost](#cost). |
+| **Cost rates** | Recomputed from token counts at current OpenAI list prices (`evaluation/evaluate.py`, `_PRICE_PER_1M_TOKENS`). `scripts/langfuse_fix_model_prices.py` was run on this box (Phase 3 of `docs/CLIENT_DEPLOYMENT_RUNBOOK.md`), so Langfuse's own `totalCost` now matches the recompute — see § [Cost](#cost). |
 
 ---
 
 ## Query path
 
-Per-stage and end-to-end latency, 53-question `--split test` run:
+Per-stage and end-to-end latency, 53-question `--split test --no-judge` run:
 
 | Stage | Type | n | p50 | p95 | mean | Notes |
 |---|---|---|---|---|---|---|
-| `rewrite` | generation | 53 | 0.156 s | 0.176 s | 0.160 s | one `gpt-4o-mini` chat call (HyDE) **+ one `text-embedding-3-small` call** on this build — #138 later split that embed into its own `embed_query` generation (~0.15–0.2 s), so on current builds `rewrite` is chat-only and `embed_query` is a sibling span; end-to-end is unchanged minus one now-removed duplicate embed |
+| `rewrite` | generation | 53 | 1.461 s | 2.130 s | 1.571 s | one `gpt-4o-mini` chat call (HyDE — writes a hypothetical answer paragraph); 71 prompt / 140 completion tokens mean. Latency is OpenAI round-trip from `eu-central-1`, not local compute |
 | `filter_extraction` | span | — | — | — | — | **not measured** — the eval harness skips it. In the `query` pipeline it is a synchronous keyword scan of the question string (`_extract_filters`), no I/O, sub-millisecond |
-| `hybrid_search` | span | 53 | 0.166 s | 0.193 s | 0.168 s | BM25 (in-memory) ∥ Qdrant vector search, RRF fused, top-20 |
-| `rerank` | span | 53 | 0.150 s | 0.197 s | 0.166 s | cross-encoder over 20 `(query, chunk)` pairs on CPU, top-5 |
-| `generate` | generation | 53 | 1.007 s | 2.018 s | 1.097 s | `gpt-4o`, ~1340 prompt / ~73 completion tokens |
-| **end-to-end** `/query` | trace | 53 | **1.487 s** | **2.629 s** | 1.592 s | |
+| `embed_query` | generation | 53 | ~0.3 s | — | — | **not broken out** by `benchmark_from_langfuse.py`; the ~0.32 s residual between the summed stages (3.57 s) and end-to-end p50 (3.88 s) is `embed_query` (one `text-embedding-3-small` call, ~75 tokens) plus orchestration overhead |
+| `hybrid_search` | span | 53 | 0.011 s | 0.027 s | 0.013 s | BM25 (in-memory) ∥ Qdrant vector search, RRF fused, top-20. **~15× faster than the M1 revision (0.166 s)** — #138 removed the duplicate dense-leg embed that used to sit inside this span |
+| `rerank` | span | 53 | 1.150 s | 1.617 s | 1.216 s | cross-encoder over 20 `(query, chunk)` pairs on 2 vCPU, top-5. ~7–8× the M1 (0.15 s) — no fast Apple PyTorch path, burstable CPU |
+| `generate` | generation | 53 | 0.943 s | 2.722 s | 1.110 s | `gpt-4o`, ~745 prompt / ~61 completion tokens mean (top-5 context + system prompt) |
+| **end-to-end** `/query` | trace | 53 | **3.883 s** | **5.482 s** | 4.087 s | |
 
-**`generate` is ~68 % of median latency** and essentially all of the p95 spread
-(OpenAI-side variance). The three local retrieval stages are ~0.15–0.17 s each and
-flat — at this corpus size they are not doing meaningful work.
+**`rewrite` + `rerank` are ~67 % of median latency now** (1.46 s + 1.15 s of a
+3.88 s median). On the M1 revision `generate` dominated at ~68 %; here it is only
+~24 %. The shift is entirely the host: `rewrite` pays OpenAI + trans-Atlantic
+round-trip, `rerank` runs the cross-encoder on 2 burstable vCPUs. The Qdrant/BM25
+retrieval stage is now negligible (`0.011 s`).
+
+p95 spread is `generate` (OpenAI-side variance, 0.94 → 2.72 s) plus `rewrite`
+(2.13 s).
 
 ---
 
 ## Cold start
 
-Paid once, at API startup (`api/main.py` warms the reranker and rebuilds the BM25
-index before serving). Measured on the same M1:
+Paid once, at API startup (`api/main.py` checks the collection, rebuilds the BM25
+index, and warms the reranker before serving). Measured on the `t3.large` from a
+`docker compose restart app`, via Docker's log timestamps:
 
-| Step | Time | Notes |
+| Phase | Time | Notes |
 |---|---|---|
-| `import retrieval.reranker` | ~6.6 s | pulls in `torch` + `sentence-transformers` — one-time process cost |
-| `Reranker().warm_up()` | ~1.4 s | model load from the local HF cache + init |
-| First `rerank` after boot | ~1.5 s | lazy CUDA/MPS-absent init on the first real forward pass; subsequent calls are ~0.15 s (see the query table) |
-| Reranker model download | ~90 MB | first ever run only — `cross-encoder/ms-marco-MiniLM-L-6-v2` from HuggingFace, then cached |
-| BM25 index build at startup | instant @ 61 chunks | `O(n)` in corpus size — see § [At scale](#what-changes-at-scale) |
+| Container restart + Python import | **~14 s** | SIGTERM to uvicorn's "Started server process". Dominated by importing `torch` + `sentence-transformers` on 2 burstable vCPUs (the M1 revision isolated this slice at ~6.6 s). |
+| Lifespan startup hook | **~1.4 s** | `GET /collections` + BM25 rebuild over 59 chunks + reranker `warm_up()` + Langfuse init |
+| **`restart` → serving** | **~15 s** | to "Application startup complete" / `/health` |
+| First `rerank` after boot | ~1–1.5 s extra | lazy first-forward init on the first real query (M1 revision); not isolated on this run |
+| Reranker model download | ~90 MB, first-ever run only | `cross-encoder/ms-marco-MiniLM-L-6-v2`, then cached in the image layer |
+| BM25 index build at startup | part of the ~1.4 s above | `O(n)` in corpus size — instant at 59 chunks, see § [At scale](#what-changes-at-scale) |
 
-So `/health` is meaningful ~8 s after `docker compose up`, and the **first query
-after a restart** can see an extra ~1.5 s in the `rerank` stage.
+So `/health` is meaningful **~15 s** after `docker compose restart app`, and the
+first query after a restart can see ~1 s extra in `rerank`. The `torch` import,
+not the pipeline warm-up, is the bulk of it.
 
 ---
 
 ## Ingest path
 
-`POST /ingest/full` over the 61-chunk corpus, representative isolated runs:
+`POST /ingest/full` over the 59-chunk corpus:
 
 | Metric | Value |
 |---|---|
-| Wall time | **~10 s** for 42 documents / 61 chunks (isolated runs 9.4–10.0 s; three *overlapping* runs measured 23–25 s — contention, not the steady-state number) |
-| Throughput | ~4.3 docs/s, ~6.1 chunks/s |
-| Dominant cost | `embed` — 42 sequential `text-embedding-3-small` calls, ~0.19 s each, **~82 % of wall time**. Parsing, chunking and Qdrant upsert are near-zero next to the embedding round-trips. |
-| ERPNext listing | 2 `list:<doctype>` calls, ~0.06 s each |
+| Wall time | **17.7 s** for 40 documents / 59 chunks |
+| Throughput | ~2.3 docs/s, ~3.3 chunks/s |
+| Dominant cost | `embed` — 40 sequential `text-embedding-3-small` calls, **~0.44 s each** (network round-trip `eu-central-1` → OpenAI; ~2× the M1's ~0.19 s). Parsing, chunking and Qdrant upsert are near-zero next to the embedding round-trips. |
+| Embed tokens | 3,032 total for the whole corpus |
 
 Embedding is **one batched call per document, documents processed serially** — the
-wall time is 42 network round-trips in sequence, not compute.
+wall time is 40 network round-trips in sequence, not compute. On a box further
+from the OpenAI endpoint this term grows; batching across documents (not currently
+done) or a local embedding model (#101) would cut it.
 
-**Incremental (webhook) re-index:** ~0.6 s for a single 1-chunk document (fetch +
-parse + chunk + 1 embed + upsert + full BM25 rebuild); the first re-index after a
-restart pays the cold-reranker cost on top (~2.5 s observed).
+**Incremental (webhook) re-index:** p50 **1.66 s**, p95 1.70 s (n=2) for a single
+1-chunk document — fetch + parse + chunk + 1 embed + upsert + full BM25 rebuild.
+~2.5× the M1's ~0.6 s (network again). The first re-index after a restart also
+pays the cold-reranker cost on top.
 
 ---
 
 ## Cost
 
 All figures recomputed from **measured token counts** at **current OpenAI list
-prices**. Where Langfuse's own `totalCost` differs, both are shown.
+prices**. `scripts/langfuse_fix_model_prices.py` has run on this project, so
+Langfuse's own `totalCost` agrees.
 
 ### Per query
 
 | Component | Model | Tokens (mean) | Cost |
 |---|---|---|---|
-| `generate` | `gpt-4o` | 1340 in / 73 out | **$0.0041** |
-| `rewrite` (HyDE) | `gpt-4o-mini` | ~80 in / ~150 out (est.) | **~$0.0001** |
-| query embedding | `text-embedding-3-small` | ~150 | <$0.00001 (negligible) |
-| **Total** | | | **≈ $0.0042 / query** |
+| `generate` | `gpt-4o` | 745 in / 61 out | **$0.00247** |
+| `rewrite` (HyDE) | `gpt-4o-mini` | 71 in / 140 out | **$0.00009** |
+| `embed_query` | `text-embedding-3-small` | ~75 | <$0.000002 (negligible) |
+| **Total** | | | **≈ $0.0026 / query** |
 
-> **These numbers were measured against a Langfuse project whose `gpt-4o` price
-> was the stale mid-2024 launch rate** ($5 / $15 per 1M in/out vs. the current
-> $2.50 / $10), so the raw traces read ~$0.0078/query — nearly 2×. Token counts
-> were always correct; only Langfuse's bundled price table was stale (**#137**).
-> Fixed by `scripts/langfuse_fix_model_prices.py`, which adds a project-level
-> price override at the current rate — run per deployment (Phase 3 of
-> `docs/CLIENT_DEPLOYMENT_RUNBOOK.md`). `results.json`'s `costs` block (#130)
-> prices independently at current rates and was never affected.
+Cross-check — Langfuse's own cost on these 53 traces: **$0.00257 mean, $0.00365
+p95**. The recompute and Langfuse now agree because the project's `gpt-4o` price
+override is in place (**#137**; without it self-hosted Langfuse 2.x prices
+`gpt-4o` at its stale mid-2024 launch rate, ~1.9× high — the failure mode the
+earlier revision of this doc was measured under). `results.json`'s `costs` block
+(#130) prices independently at current rates and was never affected.
 
 ### Per full ingest
 
-**$0.00006** — the entire 61-chunk corpus embeds for ~3,000 `text-embedding-3-small`
-tokens. Embedding prices have not changed, so Langfuse agrees here.
+**$0.000061** — the entire 59-chunk corpus embeds for ~3,032
+`text-embedding-3-small` tokens. Embedding prices are unchanged, so Langfuse
+agrees here.
 
 ### Projected monthly
 
-Generation dominates; ingest is a rounding error. At **$0.0042/query**:
+Generation dominates the marginal cost; ingest is a rounding error. At
+**$0.0026/query**:
 
-| Query volume | OpenAI / month | + VM (`t3.large`, on-demand) | Total |
+| Query volume | OpenAI / month | + VM (`t3.large` on-demand, `eu-central-1`, + 30 GB gp3) | Total |
 |---|---|---|---|
-| 200 queries/day | ~$25 | ~$60 | **~$85/mo** |
-| 1,000 queries/day | ~$126 | ~$60 | **~$186/mo** |
+| 200 queries/day | ~$16 | ~$60 | **~$75/mo** |
+| 1,000 queries/day | ~$78 | ~$60 | **~$140/mo** |
 
-Assumption: query mix and token counts match the `--split test` set (contract Q&A,
-~1340-token prompts). A verbose-answer or larger-context workload scales the
-`generate` term linearly.
+Assumption: query mix and token counts match the `--split test` set (contract
+Q&A, ~745-token prompts). A verbose-answer or larger-context workload scales the
+`generate` term linearly. A reserved instance or Savings Plan roughly halves the
+VM term.
 
 ---
 
 ## What changes at scale
 
-These numbers are from 61 chunks and one caller. What moves first as either grows:
+These numbers are from 59 chunks and one caller. What moves first as either grows:
 
 - **BM25 index rebuild** (`retrieval/hybrid_search.py`) — the in-memory index is
   rebuilt *in full* at startup **and on every webhook**. `O(n)` in corpus size;
-  instant at 61 chunks, seconds at 100k, and it blocks the event loop during a
-  webhook re-index. This is the first thing to bite — tracked in #97 (migrate the
-  lexical leg to Qdrant native sparse vectors).
-- **Reranker under concurrency** — one lazy singleton, CPU inference, no batching
-  across requests. Concurrent queries serialize on it; the `rerank` p95 would
-  climb sharply above one concurrent caller.
+  part of the ~1.4 s warm-up at 59 chunks, seconds at 100k, and it blocks the
+  event loop during a webhook re-index. This is the first thing to bite — tracked
+  in #97 (migrate the lexical leg to Qdrant native sparse vectors).
+- **Reranker under concurrency** — one lazy singleton, CPU inference on 2
+  burstable vCPUs, no batching across requests. Single-caller `rerank` is already
+  1.15 s here; concurrent queries serialize on it and the p95 would climb sharply
+  above one concurrent caller. This is the tightest constraint on this instance
+  size — see #140.
 - **Qdrant vector search** — HNSW latency is roughly flat into the millions of
-  vectors, so this stays ~0.15 s. Memory is the constraint: ~6 KB per 1536-dim
+  vectors, so this stays sub-second. Memory is the constraint: ~6 KB per 1536-dim
   point plus payload.
 - **`generate`** — unchanged by corpus size (fixed top-5 context). Scales with
   OpenAI-side latency and rate limits, not anything local.
 - **Ingest** — serial per-document embedding means full-ingest wall time is linear
-  in document count (~0.19 s each). Batching across documents would cut it; not
-  currently done.
+  in document count (~0.44 s each from this box). Batching across documents would
+  cut it; not currently done.
 
 ---
 
 ## Related
 
 - `docs/ARCHITECTURE.md` § Observability — the span/generation shapes these numbers come from
+- #139 — the EC2 migration rehearsal these `t3.large` figures were taken during
+- #146 — `benchmark_from_langfuse.py` / `evaluate.py` friction on a fresh deploy
+- #140 — concurrency benchmark + concurrent-user capacity envelope
 - #130 — per-run cost capture in `results.json` (`costs` block, `request_count`)
 - #137 — Langfuse self-hosted `gpt-4o` stale price, fixed by `scripts/langfuse_fix_model_prices.py`
+- #138 — query-embed split (why `hybrid_search` dropped to ~0.01 s)
 - #97 — BM25 → Qdrant sparse vectors (the scale bottleneck above)
 - #101 — local embedding model (would remove the embed round-trip from ingest and query)
 - #50 — quality monitoring (the other axis: is the answer good, not how fast/cheap)
