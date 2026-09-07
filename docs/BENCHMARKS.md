@@ -188,6 +188,7 @@ These numbers are from 59 chunks and one caller. What moves first as either grow
 
 - `docs/ARCHITECTURE.md` § Observability — the span/generation shapes these numbers come from
 - #139 — the EC2 migration rehearsal these `t3.large` figures were taken during
+- #148 — query-path latency investigation (`rewrite` + `rerank` are ~⅔ of median `/query`)
 - #146 — `benchmark_from_langfuse.py` / `evaluate.py` friction on a fresh deploy
 - #140 — concurrency benchmark + concurrent-user capacity envelope
 - #130 — per-run cost capture in `results.json` (`costs` block, `request_count`)
