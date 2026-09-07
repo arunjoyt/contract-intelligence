@@ -27,11 +27,35 @@ EC2 box, tracked in #139.
 
 Fix branch: after Phase 5. No PR (keep #17 in sync per workflow).
 
+### #144 — app logout does not end the ERPNext SSO session (2026-09-07)
+
+<https://github.com/arunjoyt/contract-intelligence/issues/144>
+
+### #145 — OAuth Client `allowed_roles` defaults to `Desk User` and gates `/authorize` (2026-09-07)
+
+<https://github.com/arunjoyt/contract-intelligence/issues/145> — folds in the "403 negative
+test isn't doable with a safe test user" finding as the runbook-side mitigation.
+
+### #146 — Phase 5 eval + benchmark tooling misbehaves on a fresh deploy (2026-09-07)
+
+<https://github.com/arunjoyt/contract-intelligence/issues/146> — `evaluate.py` per-question
+ERROR (`_link_dataset_run` not actually silent) + `benchmark_from_langfuse.py` can't run
+in the container or on a bare host.
+
+### #147 — refresh BENCHMARKS.md, committed numbers are M1-laptop and partly stale (2026-09-07)
+
+<https://github.com/arunjoyt/contract-intelligence/issues/147>
+
 ---
 
 ## Not yet filed
 
-### App logout does not end the ERPNext SSO session (2026-09-04)
+_(none — all findings filed as of 2026-09-07)_
+
+<details>
+<summary>Filed findings — original notes</summary>
+
+### App logout does not end the ERPNext SSO session (2026-09-04) → #144
 
 `frontend/auth_ui.py:show_logout_button()` only does `del st.session_state.jwt` — it clears
 the app's JWT but never touches the ERPNext session. There is no RP-initiated logout
@@ -48,7 +72,7 @@ testing role-based access with a second user without an incognito window.
   ("use an incognito window to test a second role").
 - Found while running runbook Phase 5 smoke test "user outside ALLOWED_ROLES -> 403".
 
-### OAuth Client `allowed_roles` defaults to `Desk User` and gates `authorize` (2026-09-04)
+### OAuth Client `allowed_roles` defaults to `Desk User` and gates `authorize` (2026-09-04) → #145
 
 Frappe v15/16 gives `OAuth Client.allowed_roles` a default of `Desk User` that
 **cannot be cleared** (re-populates on save). Frappe's `authorize` endpoint then
@@ -69,7 +93,7 @@ Consequences the runbook must cover:
 
 - Found while running runbook Phase 5, incognito login as the negative-test user.
 
-### evaluate.py spams a scary per-question ERROR on a fresh deploy (2026-09-04)
+### evaluate.py spams a scary per-question ERROR on a fresh deploy (2026-09-04) → #146
 
 Runbook Phase 5's `python evaluation/evaluate.py --split test --no-judge` logs
 `ERROR Internal error occurred. This is an unusual occurrence and we are monitoring
@@ -90,7 +114,7 @@ dataset-run-item are outside it; make the whole thing genuinely silent.
 
 - Found running runbook Phase 5 latency-baseline step.
 
-### benchmark_from_langfuse.py can't run in the container or (easily) on the host (2026-09-04)
+### benchmark_from_langfuse.py can't run in the container or (easily) on the host (2026-09-04) → #146
 
 Runbook Phase 5 calls `python scripts/benchmark_from_langfuse.py` right after
 `evaluate.py`. But: inside the `app` container it does `dotenv_values("/app/.env")`
@@ -103,7 +127,7 @@ is absent; (b) runbook should show the `docker compose cp .env ...` dance or a
 dedicated `docker compose run` recipe. Same latent issue applies to any Phase 5/6
 script the runbook expects to "just run".
 
-### Phase 5 "403 negative test" is not doable via the real OAuth flow with a safe test user (2026-09-04)
+### Phase 5 "403 negative test" is not doable via the real OAuth flow with a safe test user (2026-09-04) → #145
 
 The runbook says "user outside `ALLOWED_ROLES` -> 403". But to reach the app's role check,
 the user must first clear ERPNext's `authorize` (System User + a role in the OAuth Client's
@@ -115,7 +139,7 @@ set `ALLOWED_ROLES` on the box to a role the working test user lacks
 `{"detail":"Access denied — insufficient ERPNext roles"}` (403), revert `.env`, restart
 `app`. Runbook Phase 5 should document this substitute as the default.
 
-### docs/BENCHMARKS.md numbers are M1-laptop and partly stale (2026-09-04)
+### docs/BENCHMARKS.md numbers are M1-laptop and partly stale (2026-09-04) → #147
 
 The committed latency/cost tables were measured on an M1 laptop at an older build.
 The Phase 5 t3.large run diverges enough that the doc misleads a real deployment:
@@ -140,3 +164,5 @@ The Phase 5 t3.large run diverges enough that the doc misleads a real deployment
   `~/eval-results-139/benchmark.txt` on the box) on a branch, and mark the methodology
   row with the instance type. Do NOT touch `evaluation/results.baseline.json` — this
   was a `--no-judge` run.
+
+</details>
