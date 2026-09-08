@@ -9,9 +9,12 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from benchmark_from_langfuse import _cost_at_list, _pctile  # noqa: E402
+import benchmark_from_langfuse  # noqa: E402
+from benchmark_from_langfuse import _cfg, _cost_at_list, _pctile  # noqa: E402
 
 
 def test_pctile_interpolates() -> None:
@@ -34,3 +37,17 @@ def test_cost_at_list_uses_current_rates() -> None:
 
 def test_cost_at_list_unknown_model_is_none() -> None:
     assert _cost_at_list("some-model-not-in-the-table", 100, 100) is None
+
+
+def test_cfg_env_beats_dotenv_beats_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        benchmark_from_langfuse, "_DOTENV", {"A": "from_dotenv", "B": "from_dotenv"}
+    )
+    monkeypatch.setenv("A", "from_env")
+    monkeypatch.delenv("B", raising=False)
+    monkeypatch.delenv("C", raising=False)
+
+    assert _cfg("A") == "from_env"
+    assert _cfg("B") == "from_dotenv"
+    assert _cfg("C", "fallback") == "fallback"
+    assert _cfg("C") is None

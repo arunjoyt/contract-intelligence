@@ -12,6 +12,12 @@ recomputed from token counts at the rates in ``evaluation/evaluate.py``'s
 has run against the project; without it, self-hosted Langfuse 2.x prices gpt-4o at
 its stale mid-2024 launch rate, ~1.9x the current list price (#137, BENCHMARKS.md).
 
+Config (LANGFUSE_HOST / LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY) is read from
+the real environment first, then the repo-root ``.env``. So this runs unchanged
+inside the ``app`` container -- ``docker compose exec app python
+scripts/benchmark_from_langfuse.py`` -- where compose passes the keys as env vars
+and there is no ``.env`` file, as well as on a host that has a ``.env``.
+
 Usage:
     python scripts/benchmark_from_langfuse.py [--query-run-size 53]
 """
@@ -21,6 +27,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import statistics as st
 import sys
 import urllib.request
@@ -32,15 +39,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from evaluation.evaluate import _PRICE_PER_1M_TOKENS  # noqa: E402
 
-_ENV = {**dotenv_values(Path(__file__).resolve().parent.parent / ".env")}
-_HOST = _ENV.get("LANGFUSE_HOST", "http://localhost:3000").rstrip("/")
+_DOTENV = dotenv_values(Path(__file__).resolve().parent.parent / ".env")
 _QUERY_SPANS = ("rewrite", "filter_extraction", "hybrid_search", "rerank", "generate")
 
 
+def _cfg(key: str, default: str | None = None) -> str | None:
+    """Real environment wins over the .env file; either beats the default."""
+    return os.environ.get(key) or _DOTENV.get(key) or default
+
+
+_HOST = _cfg("LANGFUSE_HOST", "http://localhost:3000").rstrip("/")
+
+
 def _api(path: str) -> dict:
-    token = base64.b64encode(
-        f"{_ENV['LANGFUSE_PUBLIC_KEY']}:{_ENV['LANGFUSE_SECRET_KEY']}".encode()
-    ).decode()
+    pub, sec = _cfg("LANGFUSE_PUBLIC_KEY"), _cfg("LANGFUSE_SECRET_KEY")
+    if not pub or not sec:
+        sys.exit(
+            "LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY not set (checked the environment "
+            "and the repo-root .env)"
+        )
+    token = base64.b64encode(f"{pub}:{sec}".encode()).decode()
     req = urllib.request.Request(_HOST + path, headers={"Authorization": f"Basic {token}"})
     with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 (localhost)
         return json.load(resp)
