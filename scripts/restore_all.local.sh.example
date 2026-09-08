@@ -24,7 +24,13 @@ export QDRANT_RESTORE_SNAPSHOT="/path/to/backups/qdrant/<snapshot-file>.snapshot
 # Langfuse Postgres: the exact .pgdump file to restore.
 export POSTGRES_RESTORE_DUMP="/path/to/backups/postgres/<dump-file>.pgdump"
 
+# POSTGRES_USER: restore_all.sh reads this from the repo-root .env automatically
+# when it isn't set here, so on a standard deployment you do NOT need to set it.
+# Only set it if your .env lives elsewhere (point ENV_FILE at it instead) or the
+# Postgres role differs from what .env records.
+
 # Uncomment to override other defaults (see restore_all.sh for what each does):
+# export ENV_FILE="/path/to/contract-intelligence/.env"
 # export QDRANT_URL="http://localhost:6333"
 # export QDRANT_COLLECTION="contract"
 # export QDRANT_CONTAINER="contract-intelligence-qdrant-1"

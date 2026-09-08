@@ -24,6 +24,23 @@ else
     exit 1
 fi
 
+# Read KEY=value from the deployment's .env (repo root), for vars not already
+# set via the environment or restore_all.local.sh. On a real deployment
+# POSTGRES_USER is a random string generated into .env only (see
+# docs/CLIENT_DEPLOYMENT_RUNBOOK.md Phase 3), so without this the hardcoded
+# "langfuse" fallback targets the wrong role. Prints nothing if .env or the
+# key is absent.
+ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/../.env}"
+env_file_value() {
+    [ -f "$ENV_FILE" ] || return 0
+    local line
+    line="$(grep -E "^[[:space:]]*$1=" "$ENV_FILE" | tail -n1)"
+    line="${line#*=}"
+    line="${line%\"}"; line="${line#\"}"
+    line="${line%\'}"; line="${line#\'}"
+    printf '%s' "$line"
+}
+
 ASSUME_YES=0
 if [ "${1:-}" = "--yes" ]; then
     ASSUME_YES=1
@@ -42,6 +59,7 @@ QDRANT_CONTAINER="${QDRANT_CONTAINER:-contract-intelligence-qdrant-1}"
 QDRANT_RESTORE_SNAPSHOT="${QDRANT_RESTORE_SNAPSHOT:-}"
 
 POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-contract-intelligence-postgres-1}"
+POSTGRES_USER="${POSTGRES_USER:-$(env_file_value POSTGRES_USER)}"
 POSTGRES_USER="${POSTGRES_USER:-langfuse}"
 POSTGRES_DB="${POSTGRES_DB:-langfuse}"
 POSTGRES_RESTORE_DUMP="${POSTGRES_RESTORE_DUMP:-}"
@@ -62,7 +80,7 @@ else
     echo "  Qdrant: SKIPPED (QDRANT_RESTORE_SNAPSHOT not set)"
 fi
 if [ -n "$POSTGRES_RESTORE_DUMP" ]; then
-    echo "  Postgres ($POSTGRES_DB): $POSTGRES_RESTORE_DUMP"
+    echo "  Postgres ($POSTGRES_DB, role $POSTGRES_USER): $POSTGRES_RESTORE_DUMP"
 else
     echo "  Postgres: SKIPPED (POSTGRES_RESTORE_DUMP not set)"
 fi
