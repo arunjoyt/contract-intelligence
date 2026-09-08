@@ -125,6 +125,14 @@ OAuth2 is built into Frappe — no custom app needed:
 3. Set **Redirect URI** to `https://api.contract-intelligence.example.com/auth/callback` (the API domain —
    `/auth/callback` is a FastAPI route, not served by the Streamlit frontend)
 4. Note the generated `client_id` and `client_secret`
+5. **Allowed Roles** — Frappe v15/16 defaults this field to `Desk User` and re-populates it on
+   save if you clear it. Frappe's `authorize` endpoint then requires the logging-in user to hold
+   one of the listed roles, so either every app user must have the `Desk User` role, **or** add
+   the four roles from the table below to this OAuth Client's Allowed Roles list. A user who
+   authenticates but holds none of them is bounced at ERPNext with a misleading
+   `{"error":"invalid_request","description":"Invalid client_id parameter value."}` — the cause
+   is roles, not the `client_id`. This is a browser-facing ERPNext response during the redirect;
+   the FastAPI app never sees it, so it can't be rewritten server-side.
 
 ### Auth Flow
 

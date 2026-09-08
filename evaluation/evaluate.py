@@ -14,10 +14,12 @@ pipeline.constants -- the same module query_pipeline.py uses -- so a baseline
 scores the exact pipeline production runs, not a drifting copy (#110).
 
 When LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY are set, each question's trace and
-RAGAS scores are also pushed to Langfuse and, if the question was pushed via
-push_dataset.py first, grouped into a comparable Experiment run in the Langfuse
-Datasets UI (#109). This is additive -- results.json is written exactly as
-before either way, and evaluate.py works with no Langfuse credentials at all.
+RAGAS scores are also pushed to Langfuse and, if the golden-set dataset was
+pushed via push_dataset.py first, grouped into a comparable Experiment run in the
+Langfuse Datasets UI (#109). Without that push the run logs one line saying so
+and skips grouping -- traces still land. This is additive -- results.json is
+written exactly as before either way, and evaluate.py works with no Langfuse
+credentials at all.
 
 Usage
 -----
@@ -75,7 +77,7 @@ from config import (  # noqa: E402
     OPENAI_MODEL,
     REWRITE_MODEL,
 )
-from evaluation.langfuse_dataset import build_client, dataset_item_id  # noqa: E402
+from evaluation.langfuse_dataset import DATASET_NAME, build_client, dataset_item_id  # noqa: E402
 from pipeline.constants import (  # noqa: E402
     ANSWER_SYSTEM_PROMPT,
     CONTEXT_META_FIELDS,
@@ -192,18 +194,35 @@ def _run_name() -> str:
         return f"eval-{datetime.now(UTC).strftime('%Y%m%dT')}{stamp}Z"
 
 
+def _dataset_available(langfuse) -> bool:
+    """True if this run's golden-set Dataset exists in the Langfuse project.
+
+    push_dataset.py is a separate manual step (#146). Without it, get_dataset
+    raises and every _link_dataset_run() call would fail -- noisily, because the
+    SDK reports the failed dataset-run-item ingestion as a per-question
+    `ERROR Internal error occurred…` line that reads like a hard failure. Probe
+    once up front so the run logs a single clear line instead and skips linking.
+    """
+    try:
+        langfuse.get_dataset(DATASET_NAME)
+        return True
+    except Exception:
+        return False
+
+
 def _link_dataset_run(langfuse, question: str, trace, run_name: str, run_metadata: dict) -> None:
     """Best-effort: group `trace` into this run's Langfuse Dataset entry.
 
-    Silently skipped if the question was never pushed via push_dataset.py -- the
-    trace and its scores are still recorded either way, just not grouped into a
-    comparable Experiment run in the Datasets UI.
+    Skipped (debug log only) if the question was never pushed via push_dataset.py
+    -- the trace and its scores are still recorded either way, just not grouped
+    into a comparable Experiment run in the Datasets UI. Callers gate this on
+    _dataset_available(); the try/except is a second line of defence.
     """
     try:
         item = langfuse.get_dataset_item(id=dataset_item_id(question))
+        item.link(trace, run_name=run_name, run_metadata=run_metadata)
     except Exception:
-        return
-    item.link(trace, run_name=run_name, run_metadata=run_metadata)
+        logger.debug("dataset-run link skipped for %r", question[:60], exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -469,8 +488,19 @@ def evaluate(
     run_config = _run_config(collection, no_judge=no_judge)
     langfuse = build_client()
     run_name = _run_name() if langfuse else None
+    link_runs = False
     if langfuse:
-        logger.info("Langfuse experiment logging enabled -- run %r", run_name)
+        link_runs = _dataset_available(langfuse)
+        if link_runs:
+            logger.info("Langfuse experiment logging enabled -- run %r", run_name)
+        else:
+            logger.info(
+                "Langfuse tracing enabled -- run %r; dataset %r not found, so per-question "
+                "traces land but are not grouped into an Experiment run "
+                "(run evaluation/push_dataset.py to enable grouping)",
+                run_name,
+                DATASET_NAME,
+            )
     else:
         logger.info("LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY not set -- experiment not recorded")
     traces_by_question: dict[str, Any] = {}
@@ -535,7 +565,8 @@ def evaluate(
         if trace:
             trace.update(output={"answer": answer})
             traces_by_question[question] = trace
-            _link_dataset_run(langfuse, question, trace, run_name, run_config)
+            if link_runs:
+                _link_dataset_run(langfuse, question, trace, run_name, run_config)
 
         record = {
             "case_class": case_class,

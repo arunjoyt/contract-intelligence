@@ -325,21 +325,18 @@ docker compose exec app python3 -c \
 - [ ] Set `JWT_EXPIRY_HOURS=0` temporarily → next request bounces to login → revert
 - [ ] **Full-pipeline smoke + latency baseline** — `python evaluation/evaluate.py --split test
   --no-judge --collection <coll>` runs every reference question end-to-end (no RAGAS judge, so
-  ~$0.10 and ~2 min), confirms none error, and writes real per-stage latency to Langfuse. A
-  per-question `ERROR Internal error occurred…` line is **benign here** — it's the Langfuse
-  dataset-run link failing because the golden set was never pushed to this project (#146); the
-  traces still land. Then `python scripts/benchmark_from_langfuse.py` for this box's own
-  latency/cost table. That script reads `/app/.env` as a file, which the container doesn't have
-  (#146) — run it with the file copied in and `LANGFUSE_HOST` pointed at the internal service:
+  ~$0.10 and ~2 min), confirms none error, and writes real per-stage latency to Langfuse. It
+  logs one line noting the golden-set dataset isn't in this project — expected, the traces still
+  land (push it with `evaluation/push_dataset.py` only if you want Experiment grouping in the
+  Datasets UI). Then, for this box's own latency/cost table:
 
   ```bash
-  docker compose cp .env app:/app/.env
-  docker compose exec app sed -i 's#^LANGFUSE_HOST=.*#LANGFUSE_HOST=http://langfuse:3000#' /app/.env
   docker compose exec app python scripts/benchmark_from_langfuse.py
-  docker compose exec app rm /app/.env
   ```
 
-  Do this baseline again after any infra move.
+  The script reads `LANGFUSE_*` from the environment, so it runs as-is in the container (compose
+  passes the keys and points `LANGFUSE_HOST` at the internal service). Do this baseline again
+  after any infra move.
 
 ### Guided review with the client expert
 
