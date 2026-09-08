@@ -10,9 +10,10 @@ Implementation is underway. **Do not assume any step is done or pending from mem
 first:**
 
 ```bash
-gh issue list          # open issues = pending work; closed = done
-gh pr list --state all # open PRs = in-progress phases; merged = shipped
-git log --oneline -20  # recent commits for context
+gh issue list                  # open issues = pending work; closed = done
+gh pr list --state all         # legacy PRs (the PR workflow has been dropped — see Branch Workflow)
+git branch -r                  # unmerged phase-<N>-* branches = in-progress / awaiting review
+git log --oneline -20          # recent commits for context
 ```
 
 `docs/IMPLEMENTATION_PLAN.md` is the **ordered** source of truth for what needs to be built (Step 0 →
@@ -22,7 +23,7 @@ auth/deployment when those steps come up.
 
 ---
 
-## Branch & PR Workflow
+## Branch Workflow
 
 **Every phase of remaining work must follow this workflow without exception.**
 
@@ -30,71 +31,47 @@ auth/deployment when those steps come up.
 
 1. **Never commit directly to `main`** for any new feature or phase work. Create a dedicated branch first.
 2. **Branch naming** — `phase-<N>-<short-slug>`, e.g. `phase-3-pipeline`.
-3. **One PR per phase** — open the PR against `main` as soon as the branch is pushed; keep it open
-   (do not merge) until the user explicitly approves a merge.
-4. **Do not merge to `main`** — create the PR and leave it. The user will review and merge.
-5. Always `git push -u origin <branch>` before creating the PR.
+3. **Check with the user before every `git commit`.** Make the edits, show what will be staged, and wait
+   for an explicit go-ahead. This holds even for doc-only changes and even when the underlying edit was
+   already approved. Approval of the *task* ("do #N") is not approval of the *commit*.
+4. **`git push` is a separate go-ahead** — don't push a branch until the user asks.
+5. **No pull requests.** The PR route has been dropped — branch, commit (once approved), push (once
+   asked), and leave the branch for the user to review and merge. No `gh pr create`, no PR template.
+6. **Do not merge to `main`** yourself unless the user explicitly says "merge" for the branch in front
+   of you; that approval doesn't roll forward to the next branch.
 
 ### Cross-referencing on GitHub
 
 - **Commit → Issue**: include `Refs #<N>` or `Closes #<N>` in the commit message body when the commit
   addresses an open issue. `Closes` auto-closes on merge; `Refs` links without closing.
-- **PR → Issue**: open the PR body with `Closes #<N>` (or `Refs #<N>` if partial) so the issue appears
-  in the PR sidebar.
-- **PR body → Commits**: when writing the PR description, reference key commit SHAs so reviewers can
-  jump to relevant diffs.
-- **Issue updates**: when posting a progress comment on an issue, include the branch name and PR URL so
-  the issue thread tells the full story.
-
-### PR body template (always use this)
-
-```
-## Summary
-- <bullet: what this phase implements>
-- <bullet: key design decision or tradeoff>
-
-## Steps completed
-- [ ] Step N — description
-- [ ] Step N+1 — description
-
-## Closes / Refs
-Closes #<issue>
-
-## Test plan
-- [ ] pytest passes with no network (mocks)
-- [ ] ruff check . passes
-- [ ] <phase-specific manual test>
-
-🤖 Generated with [Claude Code](https://claude.ai/code)
-```
+- **Issue updates**: when posting a progress comment on an issue, include the branch name so the issue
+  thread tells the full story.
 
 ### Roadmap tracking — issue #17
 
 **Issue #17** (`📍 Project Roadmap`) is the single source of truth for overall progress. Keep it in sync:
 
-- **When a phase PR is created**: post a comment on #17 linking to the PR
-  (`gh issue comment 17 --body "Phase N PR: #<pr-number>"`)
 - **When a step-level issue is closed**: the checkbox in #17 auto-ticks if the issue number is listed
   there — no manual edit needed. But do post a comment on #17 noting what shipped and referencing the
-  commit SHA.
+  commit SHA and branch.
 - **When a commit lands on a phase branch**: if it completes a step, close the corresponding step issue
   (`gh issue close <N> --comment "Completed in <sha> on branch <branch>"`); #17's checkbox updates
   automatically.
 - **When a phase is fully done**: post a summary comment on #17 (e.g. "Phase 3 complete — all checkboxes
-  ticked, PR #X merged") and update the phase heading in #17's body to add ✅
+  ticked, merged in <sha>") and update the phase heading in #17's body to add ✅
   (`gh issue edit 17 --body "$(gh issue view 17 --json body -q .body | sed ...)"` — or edit via the
   GitHub UI if the sed approach is fragile).
 
 ### Workflow checklist (per phase)
 
-1. Check GitHub state: `gh issue list` + `gh pr list --state all` + `gh issue view 17`
+1. Check GitHub state: `gh issue list` + `git branch -r` + `gh issue view 17`
 2. `git checkout -b phase-<N>-<slug>` from latest `main`
 3. Implement the step(s) for this phase
-4. Commit with `Refs #<step-issue>` or `Closes #<step-issue>` in each commit message body
-5. `git push -u origin <branch>`
-6. `gh pr create` using the PR body template above
-7. Post a comment on issue #17 linking to the new PR
-8. Leave the PR open — do not merge
+4. Show the user the diff and get an explicit go-ahead, then commit with `Refs #<step-issue>` or
+   `Closes #<step-issue>` in each commit message body
+5. `git push -u origin <branch>` once the user asks
+6. Post a comment on issue #17 with the branch name and what shipped
+7. Leave the branch for the user to review and merge
 
 ---
 
@@ -230,8 +207,8 @@ push (tests run with no network — OpenAI and Qdrant are mocked). That's the wh
 
 RAGAS evaluation is **not** in CI — it's a manual local run (`python evaluation/evaluate.py`,
 `--split dev|test|all`) against a populated Qdrant collection. `evaluation/results.baseline.json`
-is the committed reference (frozen against `--split test`); refresh it deliberately (and in the
-same PR) when a pipeline change is meant to move the numbers. See `docs/ARCHITECTURE.md` §
+is the committed reference (frozen against `--split test`); refresh it deliberately (in the same
+branch / commit) when a pipeline change is meant to move the numbers. See `docs/ARCHITECTURE.md` §
 Evaluation. The dataset is 92 entries with a dev/test split (#112); an automated gate stays off
 the table regardless — the LLM judge is too noisy to threshold, and re-ingest-only changes
 (chunking, parsing) never show up in it.
