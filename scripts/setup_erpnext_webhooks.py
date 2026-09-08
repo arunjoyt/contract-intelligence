@@ -84,10 +84,10 @@ def desired_record(name: str, doctype: str, event: str, url: str, secret: str) -
 
 
 def plan_action(existing: dict | None, desired: dict) -> str:
-    """`create` if absent, `update` if a managed field drifted, else `ok`.
+    """`create` if absent, `update` if any managed field drifted, else `ok`.
 
-    Pure — no I/O. `enable_security` is always treated as drift-free when the
-    remote already has it on, since a re-send of the secret can't be verified.
+    Pure — no I/O. `webhook_secret` is excluded from `_MANAGED_FIELDS` because
+    ERPNext returns it masked; it is re-sent on every create/update regardless.
     """
     if existing is None:
         return "create"
