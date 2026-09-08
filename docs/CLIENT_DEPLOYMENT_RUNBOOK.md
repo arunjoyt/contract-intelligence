@@ -51,8 +51,13 @@ API-permission item is the usual cause of a stalled deploy.
 
 - [ ] **ERPNext base URL**, reachable over HTTPS from the public internet
   - verify from the target box later: `curl -I $ERPNEXT_URL`
-- [ ] **ERPNext API key + secret** for a service user with read access to `Contract`,
-  `Terms and Conditions`, and `User` (the last is needed for OAuth role resolution)
+- [ ] **ERPNext API key + secret** for a service user. It needs read on `Contract` and
+  `Terms and Conditions`, **and `System Manager`** — `api/auth/oauth2.py:fetch_user_roles()`
+  reads `/api/resource/User/{name}?fields=["roles"]` on every login, and the `User.roles`
+  child table is only readable with `System Manager`. So this key is effectively
+  admin-equivalent and sits in `.env` on the internet-facing box (see the security note in
+  Phase 3 and #63). Using the ERPNext Administrator's own key is acceptable; a dedicated
+  restricted role that still exposes `User.roles` has not been made to work.
 - [ ] **OpenAI API key** — or a model-provider swap plan per `docs/MODEL_PROVIDER_SWAP.md`
 - [ ] **Client subdomain + DNS control** — you need to create two A records
 - [ ] **Naming decision**: the two hostnames, e.g. `contracts.client.com` (frontend) and
@@ -107,12 +112,28 @@ sudo certbot certonly --standalone \
 - [ ] Redirect URI: `https://api-contracts.client.com/auth/callback` (the API host, exact match
   — a trailing-slash mismatch breaks the callback)
 - [ ] Record the generated `client_id` and `client_secret` → `.env`
+- [ ] **Allowed Roles** — Frappe v15/16 defaults this to `Desk User` and won't let you clear it
+  (it re-populates on save). Frappe's `authorize` endpoint requires the logging-in user to hold
+  one of the listed roles, so **every app user needs the `Desk User` role** — *or* add all four
+  `ALLOWED_ROLES` roles (`Purchase Manager`, `Purchase User`, `Accounts User`, `System Manager`)
+  to this list. A user who clears ERPNext auth but not this gate gets a misleading
+  `{"error":"invalid_request","description":"Invalid client_id parameter value."}` — it means
+  roles, not a wrong `client_id` (#145).
 
-### Webhook records × 4
+### Webhook records × 5
 
-For incremental re-indexing. Create via desk or REST API. Every record: **Request URL**
-`https://api-contracts.client.com/webhook/erpnext`, method **POST**, structure **JSON**,
-**Enable Security** checked, **Webhook Secret** = `WEBHOOK_SECRET`, and this exact JSON body:
+For incremental re-indexing. Use the committed script — it upserts all five records
+idempotently and is safe to re-run after a URL change or secret rotation:
+
+```bash
+python scripts/setup_erpnext_webhooks.py            # reads ERPNEXT_* / WEBHOOK_SECRET / PUBLIC_API_URL from .env
+python scripts/setup_erpnext_webhooks.py --verify   # afterwards: confirm no drift / nothing missing
+```
+
+To create them by hand instead (desk → Integrations → Webhook), every record needs:
+**Request URL** `https://api-contracts.client.com/webhook/erpnext`, method **POST**,
+structure **JSON**, **Enable Security** checked, **Webhook Secret** = `WEBHOOK_SECRET`,
+and this exact JSON body:
 
 ```json
 {"doctype": "{{ doc.doctype }}", "docname": "{{ doc.name }}"}
@@ -122,13 +143,16 @@ For incremental re-indexing. Create via desk or REST API. Every record: **Reques
 |---|---|---|
 | `contract-on-submit` | Contract | `on_submit` |
 | `contract-on-update` | Contract | `on_update` |
+| `contract-on-update-after-submit` | Contract | `on_update_after_submit` |
 | `contract-on-cancel` | Contract | `on_cancel` |
 | `terms-on-update` | Terms and Conditions | `on_update` |
 
 > ⚠️ **Traps.** **Enable Security** must be checked or Frappe never sends
 > `X-Frappe-Webhook-Signature` and `webhook_handler._verify_signature()` rejects every call with
-> 401. — `on_submit` is *not valid* for Terms and Conditions (not submittable). — The
-> scripted-setup snippet is in `docs/DEPLOYMENT.md` § "Via REST API".
+> 401. — `on_submit` is *not valid* for Terms and Conditions (not submittable). —
+> **`contract-on-update-after-submit` is not optional**: a Desk edit to an `allow_on_submit`
+> field (e.g. `is_signed`) on a submitted contract fires `on_update_after_submit`, not
+> `on_update` — omit it and those edits silently never re-index (issue #96).
 
 > **Role enforcement in Option B** is gated by the `ALLOWED_ROLES` env var plus the live role
 > fetch in `api/auth/oauth2.py:fetch_user_roles()` — *not* the ERPNext Role Permissions Manager
@@ -207,46 +231,29 @@ It is also the vehicle for a staged client pilot (see *Environment strategy*).
 with attached PDFs, contracts using any custom fields or a customized Contract doctype, a few
 Terms and Conditions docs, and anything non-English.
 
-**Run it into a throwaway collection** so nothing partial is left behind — set
-`QDRANT_COLLECTION=contract_smoke` in the environment for this run, then switch back to
+**Run it into a throwaway collection** so nothing partial is left behind, then switch back to
 `contract` for the real ingest. (The full ingest is idempotent and would overwrite anyway, but a
 separate collection keeps the smoke test self-contained.)
 
-There is **no partial-ingest flag** — the sample runner is a trimmed copy of `_run_full_ingest`
-in `api/main.py`, reusing the same helpers so it exercises the real code path:
+`scripts/sample_ingest.py` is a trimmed `_do_full_ingest` (`api/main.py`) — same
+`prepare_doc_for_indexing` / `gather_chunks_for_doc` / `resolve_supplier_group` helpers, an
+explicit document list instead of a full listing, no BM25 rebuild:
 
-```python
-# scripts/sample_ingest.py  (sketch — reuses the production helpers verbatim)
-import asyncio
-from ingestion.erpnext_client import ERPNextClient
-from ingestion.embedder import Embedder
-from ingestion.webhook_handler import (
-    prepare_doc_for_indexing, gather_chunks_for_doc, resolve_supplier_group,
-)
-from retrieval.vector_store import VectorStore
+```bash
+# deliberate pick — repeat --doc; the collection is created if missing
+QDRANT_COLLECTION=contract_smoke python scripts/sample_ingest.py \
+  --doc "Contract:CON-2026-00012" \
+  --doc "Contract:CON-2026-00030" \
+  --doc "Terms and Conditions:Standard-Terms"
 
-# ("Contract", "CON-2026-00012"), ("Terms and Conditions", "Standard-Terms"), ...
-SAMPLE: list[tuple[str, str]] = [ ... ]
+# or, quick and dirty: first N of each doctype
+python scripts/sample_ingest.py --collection contract_smoke --limit 15
 
-async def main() -> None:
-    embedder, store = Embedder(), VectorStore()
-    store.ensure_collection()            # honours QDRANT_COLLECTION — set it to contract_smoke
-    async with ERPNextClient() as client:
-        for doctype, name in SAMPLE:
-            doc = await client.get_doc(doctype, name)
-            supplier_group = await resolve_supplier_group(doctype, doc, client)
-            text, metadata, force_single = prepare_doc_for_indexing(doctype, doc, supplier_group)
-            chunks = await gather_chunks_for_doc(doctype, doc, text, force_single, client)
-            if not chunks:
-                print(f"!! {doctype} {name}: 0 chunks — empty body / unreadable PDF?")
-                continue
-            vectors = embedder.embed_texts([c["text"] for c in chunks])
-            store.upsert_chunks([{**c, **metadata, "vector": v}
-                                 for c, v in zip(chunks, vectors, strict=True)])
-            print(f"ok {doctype} {name}: {len(chunks)} chunks")
-
-asyncio.run(main())
+# --dry-run stops before embed/upsert (fetch + parse + chunk only)
 ```
+
+It prints a chunk count per document and flags the obvious problems (0 chunks, all-`None`
+Contract metadata); a non-zero exit means at least one warning fired.
 
 **Then inspect the points** (Qdrant scroll snippets — `docs/DEPLOYMENT.md` §11, swap in
 `contract_smoke`):
@@ -304,16 +311,35 @@ docker compose exec app python3 -c \
 
 - [ ] Browser → frontend URL → **Login with ERPNext** → sign in as a `Purchase Manager` → ask a
   question → confirm answer + `[docname]` citations
-- [ ] Negative: user outside `ALLOWED_ROLES` → `403`
+- [ ] Negative: user outside `ALLOWED_ROLES` → `403`. The real OAuth flow can't test this with a
+  safe least-privilege account — a Website-only user is blocked earlier at ERPNext `authorize`
+  (the "Invalid client_id" gate above, #145), and you should not make a throwaway account a
+  System User on a client bench. Substitute: temporarily point `ALLOWED_ROLES` at a role your
+  working test user *lacks* (`ALLOWED_ROLES=Accounts Manager` in `.env`),
+  `docker compose up -d --force-recreate app`, log in as that user, confirm
+  `{"detail":"Access denied — insufficient ERPNext roles"}` (403), then revert `.env` and
+  recreate `app` again.
 - [ ] `POST /query` with no `Authorization` header → `401`
 - [ ] Direct TCP to `<ip>:6333` → connection refused
 - [ ] Edit a contract in ERPNext → confirm re-index in `app` logs / rising point count
 - [ ] Set `JWT_EXPIRY_HOURS=0` temporarily → next request bounces to login → revert
 - [ ] **Full-pipeline smoke + latency baseline** — `python evaluation/evaluate.py --split test
   --no-judge --collection <coll>` runs every reference question end-to-end (no RAGAS judge, so
-  ~$0.10 and ~2 min), confirms none error, and writes real per-stage latency to Langfuse. Then
-  `python scripts/benchmark_from_langfuse.py` for this box's own latency/cost table. Do this again
-  after any infra move.
+  ~$0.10 and ~2 min), confirms none error, and writes real per-stage latency to Langfuse. A
+  per-question `ERROR Internal error occurred…` line is **benign here** — it's the Langfuse
+  dataset-run link failing because the golden set was never pushed to this project (#146); the
+  traces still land. Then `python scripts/benchmark_from_langfuse.py` for this box's own
+  latency/cost table. That script reads `/app/.env` as a file, which the container doesn't have
+  (#146) — run it with the file copied in and `LANGFUSE_HOST` pointed at the internal service:
+
+  ```bash
+  docker compose cp .env app:/app/.env
+  docker compose exec app sed -i 's#^LANGFUSE_HOST=.*#LANGFUSE_HOST=http://langfuse:3000#' /app/.env
+  docker compose exec app python scripts/benchmark_from_langfuse.py
+  docker compose exec app rm /app/.env
+  ```
+
+  Do this baseline again after any infra move.
 
 ### Guided review with the client expert
 
@@ -444,7 +470,7 @@ scoped add-on.
 | Variable | Source | Notes |
 |---|---|---|
 | `ERPNEXT_URL` | client | HTTPS base URL; must be reachable from the box |
-| `ERPNEXT_API_KEY` | erpnext | service user, read on Contract / Terms / User |
+| `ERPNEXT_API_KEY` | erpnext | service user; needs `System Manager` (role lookup reads `User.roles`) — effectively admin, see Phase 0 |
 | `ERPNEXT_API_SECRET` | erpnext | |
 | `ERPNEXT_OAUTH_CLIENT_ID` | erpnext | Integrations → OAuth Client |
 | `ERPNEXT_OAUTH_CLIENT_SECRET` | erpnext | |
@@ -488,6 +514,7 @@ scoped add-on.
 |---|---|
 | `/health` fails after launch | `docker compose logs app` — usually a malformed `.env` value or unreachable `ERPNEXT_URL` |
 | Login redirects in a loop / errors on callback | `OAUTH_REDIRECT_URI` must exactly match the ERPNext OAuth client (trailing slash, scheme, host); `PUBLIC_API_URL` set to the public API URL |
+| ERPNext login shows `"Invalid client_id parameter value"` | Not a wrong `client_id` — the user lacks a role in the OAuth Client's **Allowed Roles** (defaults to `Desk User`). Add `Desk User` to the user, or the four `ALLOWED_ROLES` to the OAuth Client (#145) |
 | Every webhook returns `401 Invalid webhook signature` | "Enable Security" unchecked on the Webhook record, or `webhook_secret` ≠ `WEBHOOK_SECRET` |
 | Full ingest indexes 0 documents | API key/secret permissions on `Contract`; `ERPNEXT_URL` reachable from the box; check `app` logs for the fetch error |
 | `langfuse` service crash-loops on boot | Postgres credential mismatch against an existing `pg_data` volume — see Phase 3 |

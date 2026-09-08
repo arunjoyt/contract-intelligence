@@ -209,6 +209,13 @@ Also required (not new — already used by ingestion, but Option B's role-fetch 
 the Auth Flow above use these server-side credentials to read the `User` doctype's roles, since the
 OAuth Bearer token doesn't have resource-API read access to it.
 
+> ⚠️ **This key needs `System Manager`.** Step 6c reads `/api/resource/User/{name}?fields=["roles"]`,
+> and Frappe only exposes the `User.roles` child table to `System Manager`. A read-only "Contract +
+> Terms" service role is not enough for Option B — the key is effectively admin-equivalent and lives
+> in `.env` on the internet-facing box. A dedicated restricted role that still returns `User.roles`
+> has not been made to work; the reference deploy uses the ERPNext Administrator's key. Relates to
+> #63 (credential-leak surface).
+
 ### Infrastructure Topology
 
 ```
@@ -334,38 +341,25 @@ Create the following Webhook records in ERPNext desk (or via the REST API). For 
 
 ### Via REST API (scripted setup)
 
-```python
-import urllib.request, json
+`scripts/setup_erpnext_webhooks.py` upserts all five records idempotently (create if
+absent, update on drift, no-op if already correct) — safe to re-run after a URL change
+or a `WEBHOOK_SECRET` rotation. The `WEBHOOKS` list in that file is the single source
+of truth for the table above.
 
-BASE = "http://127.0.0.1:8005"   # your ERPNext URL
-AUTH = "token <api_key>:<api_secret>"
-SECRET = "<your WEBHOOK_SECRET>"
-URL = "http://127.0.0.1:8000/webhook/erpnext"
+```bash
+python scripts/setup_erpnext_webhooks.py
+# reads ERPNEXT_URL / ERPNEXT_API_KEY / ERPNEXT_API_SECRET / WEBHOOK_SECRET / PUBLIC_API_URL from .env
+# request URL defaults to {PUBLIC_API_URL}/webhook/erpnext
 
-WEBHOOKS = [
-    ("contract-on-submit",              "Contract",            "on_submit"),
-    ("contract-on-update",              "Contract",            "on_update"),
-    ("contract-on-update-after-submit", "Contract",            "on_update_after_submit"),
-    ("contract-on-cancel",              "Contract",            "on_cancel"),
-    ("terms-on-update",                 "Terms and Conditions","on_update"),
-]
+python scripts/setup_erpnext_webhooks.py --dry-run   # print the plan, write nothing
+python scripts/setup_erpnext_webhooks.py --verify    # report drift / missing (non-zero exit if any)
 
-WEBHOOK_JSON = '{"doctype": "{{ doc.doctype }}", "docname": "{{ doc.name }}"}'
-
-for wname, doctype, event in WEBHOOKS:
-    payload = json.dumps({
-        "doctype": "Webhook", "name": wname,
-        "webhook_doctype": doctype, "webhook_docevent": event,
-        "request_url": URL, "request_method": "POST",
-        "request_structure": "JSON", "enabled": 1,
-        "enable_security": 1, "webhook_secret": SECRET,
-        "webhook_json": WEBHOOK_JSON,
-    }).encode()
-    req = urllib.request.Request(f"{BASE}/api/resource/Webhook", data=payload,
-        headers={"Authorization": AUTH, "Content-Type": "application/json"}, method="POST")
-    resp = urllib.request.urlopen(req)
-    print(json.loads(resp.read())["data"]["name"])
+# Option A / loopback: override the URL
+python scripts/setup_erpnext_webhooks.py --url http://127.0.0.1:8000/webhook/erpnext
 ```
+
+`webhook_secret` is a Password field — ERPNext returns it masked, so `--verify` checks
+every managed field except the secret.
 
 ### How modifications are handled
 
