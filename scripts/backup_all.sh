@@ -21,6 +21,23 @@ if [ -f "$SCRIPT_DIR/backup_all.local.sh" ]; then
     source "$SCRIPT_DIR/backup_all.local.sh"
 fi
 
+# Read KEY=value from the deployment's .env (repo root), for vars not already
+# set via the environment or backup_all.local.sh. On a real deployment
+# POSTGRES_USER is a random string generated into .env only (see
+# docs/CLIENT_DEPLOYMENT_RUNBOOK.md Phase 3), so without this the hardcoded
+# "langfuse" fallback is wrong and the Postgres dump fails. Prints nothing if
+# .env or the key is absent.
+ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/../.env}"
+env_file_value() {
+    [ -f "$ENV_FILE" ] || return 0
+    local line
+    line="$(grep -E "^[[:space:]]*$1=" "$ENV_FILE" | tail -n1)"
+    line="${line#*=}"
+    line="${line%\"}"; line="${line#\"}"
+    line="${line%\'}"; line="${line#\'}"
+    printf '%s' "$line"
+}
+
 BENCH_BIN="${BENCH_BIN:-}"
 BENCH_DIR="${BENCH_DIR:-}"
 SITE_NAME="${SITE_NAME:-}"
@@ -30,6 +47,7 @@ QDRANT_COLLECTION="${QDRANT_COLLECTION:-contract}"
 QDRANT_CONTAINER="${QDRANT_CONTAINER:-contract-intelligence-qdrant-1}"
 
 POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-contract-intelligence-postgres-1}"
+POSTGRES_USER="${POSTGRES_USER:-$(env_file_value POSTGRES_USER)}"
 POSTGRES_USER="${POSTGRES_USER:-langfuse}"
 POSTGRES_DB="${POSTGRES_DB:-langfuse}"
 
@@ -85,7 +103,7 @@ else
 fi
 echo
 
-echo "==> [3/3] Langfuse Postgres dump ($POSTGRES_DB)"
+echo "==> [3/3] Langfuse Postgres dump ($POSTGRES_DB, role $POSTGRES_USER)"
 if docker inspect "$POSTGRES_CONTAINER" >/dev/null 2>&1; then
     dump_name="langfuse_${TIMESTAMP}.pgdump"
     if docker exec "$POSTGRES_CONTAINER" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -F c -f "/tmp/$dump_name" \

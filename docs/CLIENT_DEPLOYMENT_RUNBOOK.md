@@ -423,7 +423,10 @@ scoped add-on.
   fill in `BACKUP_ROOT` (+ `BENCH_*` / `SITE_NAME` only if ERPNext is self-hosted on this box)
 - [ ] Run `./scripts/backup_all.sh` once by hand and confirm it produces files. It wraps Qdrant
   snapshot + Langfuse `pg_dump` + (bench only if present) ERPNext backup; each step
-  skips-with-warning rather than failing the run
+  skips-with-warning rather than failing the run. Check step `[3/3]` prints your real
+  `POSTGRES_USER` (`role …` in the header), not `langfuse` — the script reads it from this
+  repo's `.env`, so run from a checkout that has `.env`, or set `ENV_FILE` in
+  `backup_all.local.sh`
 - [ ] **If the client runs ERPNext elsewhere** (the usual case): the bench step skips — you cover
   Qdrant + Langfuse only; the client owns ERPNext backups
 - [ ] Add the schedule yourself, e.g.:

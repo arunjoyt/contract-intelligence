@@ -478,10 +478,12 @@ past queries, not something a re-ingest or re-query rebuilds. Losing it only aff
 periodic `pg_dump` if you care about historical traces surviving a migration.
 
 **Backup** (custom format — compressed, and the only format `pg_restore` accepts for selective/parallel
-restore):
+restore). `-U` must be the deployment's `POSTGRES_USER` — `langfuse` only on a stack that kept the
+default; a real deployment generates a random role into `.env` (see the runbook's Phase 3), so
+substitute `$(grep ^POSTGRES_USER= .env | cut -d= -f2-)`:
 
 ```bash
-docker exec <postgres-container> pg_dump -U langfuse -d langfuse -F c -f /tmp/langfuse_dump.pgdump
+docker exec <postgres-container> pg_dump -U <postgres-user> -d langfuse -F c -f /tmp/langfuse_dump.pgdump
 docker cp <postgres-container>:/tmp/langfuse_dump.pgdump ./langfuse_<timestamp>.pgdump
 docker exec <postgres-container> rm /tmp/langfuse_dump.pgdump
 ```
@@ -499,14 +501,14 @@ docker exec <postgres-container> rm /tmp/verify.pgdump
 
 ```bash
 docker cp ./langfuse_<timestamp>.pgdump <postgres-container>:/tmp/restore.pgdump
-docker exec <postgres-container> pg_restore -U langfuse -d langfuse --clean --if-exists /tmp/restore.pgdump
+docker exec <postgres-container> pg_restore -U <postgres-user> -d langfuse --clean --if-exists /tmp/restore.pgdump
 docker exec <postgres-container> rm /tmp/restore.pgdump
 ```
 
 **Copying to a different machine**: `scp` the `.pgdump` file to the target host, then run the restore
-steps above against that host's `postgres` container. Credentials (`langfuse`/`langfuse` by default —
-see the security issue about hardcoding these, #65) come from `docker-compose.yml`'s `POSTGRES_USER`/
-`POSTGRES_PASSWORD`, not `.env`.
+steps above against that host's `postgres` container. The role (`langfuse` only if the stack kept the
+default — see #65) is `docker-compose.yml`'s `POSTGRES_USER`, which resolves from `.env`;
+`scripts/backup_all.sh` / `restore_all.sh` read it from `.env` automatically.
 
 After any restore into a **fresh** Langfuse database, re-run
 `python scripts/langfuse_fix_model_prices.py` — the `gpt-4o` price override (#137) lives in this
@@ -536,6 +538,7 @@ export BENCH_DIR="/path/to/benches/<bench-name>"
 export SITE_NAME="<site-name>"
 
 # Optional overrides (defaults shown) — uncomment only what differs on your machine:
+# export ENV_FILE="/path/to/contract-intelligence/.env"  # only if .env isn't at the repo root
 # export QDRANT_URL="http://localhost:6333"
 # export QDRANT_COLLECTION="contract"
 # export QDRANT_CONTAINER="contract-intelligence-qdrant-1"
@@ -544,6 +547,11 @@ export SITE_NAME="<site-name>"
 # export POSTGRES_DB="langfuse"
 # export BACKUP_ROOT="$HOME/contract-intelligence-backups"
 ```
+
+`POSTGRES_USER` is read from the repo-root `.env` (or `$ENV_FILE`) when it isn't set in the
+environment or `backup_all.local.sh`, then falls back to `langfuse`. A deployment that generated a
+random Postgres role (runbook Phase 3) therefore needs no extra config as long as the script runs
+from a checkout that has `.env`; step `[3/3]`'s header prints the role it resolved.
 
 **What it does, per step:**
 
@@ -597,6 +605,9 @@ export POSTGRES_RESTORE_DUMP="/path/to/backups/postgres/<dump-file>.pgdump"
 
 A variable left empty/commented **skips that store's restore entirely** — e.g. set only
 `QDRANT_RESTORE_SNAPSHOT` to restore Qdrant without touching ERPNext or Postgres.
+
+Like `backup_all.sh`, `POSTGRES_USER` is read from the repo-root `.env` (or `$ENV_FILE`) when unset,
+falling back to `langfuse`; the confirmation summary prints the role it will target.
 
 **What it does, per step:**
 
